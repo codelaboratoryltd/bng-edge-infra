@@ -1,0 +1,6 @@
+[submodule "src/bng"]
+	path = src/bng
+	url = git@github.com:codelaboratoryltd/bng.git
+[submodule "src/nexus"]
+	path = src/nexus
+	url = git@github.com:codelaboratoryltd/nexus.git
