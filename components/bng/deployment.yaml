@@ -1,0 +1,54 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bng
+  labels:
+    app: bng
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: bng
+  template:
+    metadata:
+      labels:
+        app: bng
+    spec:
+      # BNG needs host network for DHCP and eBPF
+      hostNetwork: true
+      containers:
+        - name: bng
+          image: ghcr.io/codelaboratoryltd/bng:latest
+          args:
+            - demo
+            - --subscribers=10
+            - --duration=0  # Run forever
+            - --api-port=8080
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+            - name: metrics
+              containerPort: 9090
+              protocol: TCP
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 1000m
+              memory: 512Mi
+          # For production with eBPF:
+          # securityContext:
+          #   capabilities:
+          #     add:
+          #       - BPF
+          #       - NET_ADMIN
+          #       - SYS_RESOURCE
+          # volumeMounts:
+          #   - name: bpffs
+          #     mountPath: /sys/fs/bpf
+      # volumes:
+      #   - name: bpffs
+      #     hostPath:
+      #       path: /sys/fs/bpf

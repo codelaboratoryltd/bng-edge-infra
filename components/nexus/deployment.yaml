@@ -1,0 +1,48 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nexus
+  labels:
+    app: nexus
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nexus
+  template:
+    metadata:
+      labels:
+        app: nexus
+    spec:
+      containers:
+        - name: nexus
+          image: ghcr.io/codelaboratoryltd/nexus:latest
+          ports:
+            - name: http
+              containerPort: 9000
+              protocol: TCP
+            - name: grpc
+              containerPort: 9001
+              protocol: TCP
+          env:
+            - name: NEXUS_STORE_TYPE
+              value: memory  # Use etcd in production
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 9000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 9000
+            initialDelaySeconds: 5
+            periodSeconds: 5
