@@ -4,10 +4,10 @@ k3d-based local Kubernetes cluster with Cilium CNI for BNG development.
 
 ## Cluster Configuration
 
-- **Cluster name**: `k3d-bng`
+- **Cluster name**: `bng-edge` (Kubernetes context: `k3d-bng-edge`)
 - **CNI**: Cilium (Flannel disabled)
 - **Nodes**: 1 server, 2 agents
-- **Registry**: `localhost:5555` (k3d-bng-registry)
+- **Registry**: `localhost:5555` (k3d-bng-edge-registry)
 - **k3s version**: v1.28.5
 
 ## Port Mappings
@@ -47,7 +47,7 @@ brew install cilium-cli
 
 ```bash
 # From repository root
-tilt up --context k3d-bng
+tilt up
 ```
 
 This will:
@@ -101,21 +101,21 @@ hubble observe --verdict XDP_TX
 tilt down
 
 # Delete cluster completely
-k3d cluster delete bng
+k3d cluster delete bng-edge
 ```
 
 ### Restart Cluster
 
 ```bash
-k3d cluster start bng
-tilt up --context k3d-bng
+k3d cluster start bng-edge
+tilt up
 ```
 
 ### Rebuild from Scratch
 
 ```bash
-k3d cluster delete bng
-tilt up --context k3d-bng
+k3d cluster delete bng-edge
+tilt up
 ```
 
 ## Troubleshooting
@@ -130,7 +130,7 @@ kubectl get pods -n kube-system | grep flannel
 
 Manually install Cilium:
 ```bash
-cilium install --context k3d-bng
+cilium install --context k3d-bng-edge
 cilium status
 ```
 
@@ -138,7 +138,7 @@ cilium status
 
 Check registry is running:
 ```bash
-docker ps | grep k3d-bng-registry
+docker ps | grep k3d-bng-edge-registry
 ```
 
 Test registry:
