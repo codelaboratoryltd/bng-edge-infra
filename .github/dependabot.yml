@@ -1,0 +1,55 @@
+# Dependabot configuration for automated dependency updates
+# https://docs.github.com/en/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
+version: 2
+updates:
+  # GitHub Actions
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    commit-message:
+      prefix: "ci"
+    labels:
+      - "dependencies"
+      - "github-actions"
+
+  # Go modules for BNG submodule
+  - package-ecosystem: "gomod"
+    directory: "/src/bng"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    commit-message:
+      prefix: "deps(bng)"
+    labels:
+      - "dependencies"
+      - "go"
+      - "bng"
+    groups:
+      go-minor:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+
+  # Go modules for Nexus submodule
+  - package-ecosystem: "gomod"
+    directory: "/src/nexus"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    commit-message:
+      prefix: "deps(nexus)"
+    labels:
+      - "dependencies"
+      - "go"
+      - "nexus"
+    groups:
+      go-minor:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
