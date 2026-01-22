@@ -1,0 +1,445 @@
+name: eBPF Program Verification
+
+on:
+  push:
+    branches:
+      - main
+      - 'issue-*'
+    paths:
+      - 'src/bng/bpf/**'
+      - '.github/workflows/ebpf-verification.yml'
+  pull_request:
+    paths:
+      - 'src/bng/bpf/**'
+      - '.github/workflows/ebpf-verification.yml'
+  workflow_dispatch: # Allow manual triggering
+
+env:
+  # eBPF programs to verify
+  BPF_PROGRAMS: "dhcp_fastpath.bpf.o qos_ratelimit.bpf.o nat44.bpf.o antispoof.bpf.o"
+
+jobs:
+  # Job 1: Compile eBPF programs for x86_64
+  compile-x86_64:
+    name: Compile (x86_64)
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install eBPF build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            clang \
+            llvm \
+            libbpf-dev \
+            linux-headers-$(uname -r) \
+            linux-tools-$(uname -r) \
+            linux-tools-common \
+            gcc-multilib \
+            libc6-dev-i386
+
+      - name: Display build environment
+        run: |
+          echo "=== Build Environment ==="
+          echo "Clang version:"
+          clang --version
+          echo ""
+          echo "LLVM version:"
+          llvm-config --version || echo "llvm-config not found"
+          echo ""
+          echo "Kernel version:"
+          uname -r
+          echo ""
+          echo "Architecture:"
+          uname -m
+
+      - name: Build eBPF programs (x86_64)
+        working-directory: src/bng/bpf
+        run: |
+          echo "=== Building eBPF Programs ==="
+          make clean
+          # Build with warnings as errors
+          make CFLAGS="-O2 -g -Wall -Werror -Wno-pass-failed -target bpf -D__TARGET_ARCH_x86 -I/usr/include/x86_64-linux-gnu -I/usr/include"
+
+          echo ""
+          echo "=== Build Results ==="
+          ls -la *.bpf.o 2>/dev/null || echo "No .bpf.o files found"
+
+          # Verify all expected programs were built
+          for prog in ${{ env.BPF_PROGRAMS }}; do
+            if [ ! -f "$prog" ]; then
+              echo "ERROR: $prog was not built!"
+              exit 1
+            fi
+            echo "Built: $prog ($(stat -c%s "$prog") bytes)"
+          done
+
+      - name: Analyze eBPF object files
+        working-directory: src/bng/bpf
+        run: |
+          echo "=== eBPF Object File Analysis ==="
+          for prog in ${{ env.BPF_PROGRAMS }}; do
+            echo ""
+            echo "--- $prog ---"
+            echo "File type:"
+            file "$prog"
+            echo ""
+            echo "ELF sections:"
+            llvm-objdump -h "$prog" 2>/dev/null || objdump -h "$prog"
+            echo ""
+            echo "BPF program sections:"
+            llvm-objdump -h "$prog" 2>/dev/null | grep -E '(xdp|tc|kprobe|tracepoint|\.maps)' || echo "  (standard sections)"
+          done
+
+      - name: Upload x86_64 artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ebpf-programs-x86_64
+          path: src/bng/bpf/*.bpf.o
+          retention-days: 7
+
+  # Job 2: Compile eBPF programs for arm64 (cross-compile)
+  compile-arm64:
+    name: Compile (arm64 cross)
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install cross-compilation dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            clang \
+            llvm \
+            libbpf-dev \
+            linux-headers-$(uname -r) \
+            gcc-aarch64-linux-gnu \
+            libc6-dev-arm64-cross
+
+      - name: Build eBPF programs (arm64)
+        working-directory: src/bng/bpf
+        run: |
+          echo "=== Building eBPF Programs for arm64 ==="
+          make clean
+          # Cross-compile for arm64
+          make CFLAGS="-O2 -g -Wall -Werror -Wno-pass-failed -target bpf -D__TARGET_ARCH_arm64 -I/usr/aarch64-linux-gnu/include -I/usr/include"
+
+          echo ""
+          echo "=== Build Results (arm64) ==="
+          ls -la *.bpf.o 2>/dev/null || echo "No .bpf.o files found"
+
+          for prog in ${{ env.BPF_PROGRAMS }}; do
+            if [ ! -f "$prog" ]; then
+              echo "ERROR: $prog was not built for arm64!"
+              exit 1
+            fi
+            echo "Built: $prog ($(stat -c%s "$prog") bytes)"
+          done
+
+      - name: Upload arm64 artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ebpf-programs-arm64
+          path: src/bng/bpf/*.bpf.o
+          retention-days: 7
+
+  # Job 3: Kernel verifier checks (requires x86_64 compiled programs)
+  verifier-check:
+    name: Kernel Verifier Check
+    runs-on: ubuntu-22.04
+    needs: compile-x86_64
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install verification tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            clang \
+            llvm \
+            libbpf-dev \
+            linux-headers-$(uname -r) \
+            linux-tools-$(uname -r) \
+            linux-tools-common \
+            jq
+
+      - name: Download x86_64 artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: ebpf-programs-x86_64
+          path: src/bng/bpf/
+
+      - name: Verify kernel BPF support
+        run: |
+          echo "=== Kernel BPF Support Check ==="
+          echo "Kernel version: $(uname -r)"
+          echo ""
+
+          # Check if BPF filesystem is mounted
+          if mount | grep -q bpffs; then
+            echo "BPF filesystem: mounted"
+          else
+            echo "BPF filesystem: mounting..."
+            sudo mount -t bpf bpf /sys/fs/bpf || true
+          fi
+
+          # Check for BPF capabilities
+          echo ""
+          echo "bpftool version:"
+          sudo bpftool version || echo "bpftool not available"
+
+      - name: Test eBPF verifier - dhcp_fastpath
+        working-directory: src/bng/bpf
+        run: |
+          echo "=== Testing dhcp_fastpath.bpf.o against kernel verifier ==="
+
+          # Try to load the program
+          if sudo bpftool prog load dhcp_fastpath.bpf.o /sys/fs/bpf/test_dhcp_fastpath 2>&1; then
+            echo "SUCCESS: dhcp_fastpath.bpf.o passed kernel verifier!"
+
+            # Get program info
+            echo ""
+            echo "Program info:"
+            sudo bpftool prog show pinned /sys/fs/bpf/test_dhcp_fastpath
+
+            # Get instruction count
+            echo ""
+            echo "Instruction count:"
+            INSN_COUNT=$(sudo bpftool prog show pinned /sys/fs/bpf/test_dhcp_fastpath -j 2>/dev/null | jq -r '.insn_cnt // "N/A"')
+            echo "  Instructions: $INSN_COUNT"
+            if [ "$INSN_COUNT" != "N/A" ] && [ "$INSN_COUNT" -ge 1000000 ]; then
+              echo "WARNING: Instruction count ($INSN_COUNT) is approaching 1M limit!"
+            fi
+
+            # Cleanup
+            sudo rm -f /sys/fs/bpf/test_dhcp_fastpath
+          else
+            echo "FAILED: dhcp_fastpath.bpf.o rejected by kernel verifier"
+            exit 1
+          fi
+
+      - name: Test eBPF verifier - all programs
+        working-directory: src/bng/bpf
+        run: |
+          echo "=== Testing all eBPF programs against kernel verifier ==="
+          FAILED=0
+
+          for prog in qos_ratelimit.bpf.o nat44.bpf.o antispoof.bpf.o; do
+            echo ""
+            echo "--- Testing $prog ---"
+
+            PROG_NAME=$(basename "$prog" .bpf.o)
+            PIN_PATH="/sys/fs/bpf/test_${PROG_NAME}"
+
+            if sudo bpftool prog load "$prog" "$PIN_PATH" 2>&1; then
+              echo "SUCCESS: $prog passed kernel verifier"
+
+              # Show program info
+              sudo bpftool prog show pinned "$PIN_PATH"
+
+              # Get instruction count
+              INSN_COUNT=$(sudo bpftool prog show pinned "$PIN_PATH" -j 2>/dev/null | jq -r '.insn_cnt // "N/A"')
+              echo "Instruction count: $INSN_COUNT"
+
+              # Cleanup
+              sudo rm -f "$PIN_PATH"
+            else
+              echo "FAILED: $prog rejected by kernel verifier"
+              FAILED=1
+              # Continue testing other programs
+            fi
+          done
+
+          if [ $FAILED -eq 1 ]; then
+            echo ""
+            echo "ERROR: One or more eBPF programs failed verifier check"
+            exit 1
+          fi
+
+          echo ""
+          echo "=== All eBPF programs passed verifier checks ==="
+
+  # Job 4: bpftool analysis and map verification
+  bpftool-analysis:
+    name: bpftool Analysis
+    runs-on: ubuntu-22.04
+    needs: compile-x86_64
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install analysis tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            llvm \
+            libbpf-dev \
+            linux-headers-$(uname -r) \
+            linux-tools-$(uname -r) \
+            linux-tools-common \
+            jq
+
+      - name: Download x86_64 artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: ebpf-programs-x86_64
+          path: src/bng/bpf/
+
+      - name: Mount BPF filesystem
+        run: |
+          sudo mount -t bpf bpf /sys/fs/bpf 2>/dev/null || true
+
+      - name: Analyze eBPF programs with bpftool
+        working-directory: src/bng/bpf
+        run: |
+          echo "=== bpftool Program Analysis ==="
+
+          for prog in ${{ env.BPF_PROGRAMS }}; do
+            echo ""
+            echo "=========================================="
+            echo "Analyzing: $prog"
+            echo "=========================================="
+
+            PROG_NAME=$(basename "$prog" .bpf.o)
+            PIN_PATH="/sys/fs/bpf/analysis_${PROG_NAME}"
+
+            # Load program
+            if sudo bpftool prog load "$prog" "$PIN_PATH" 2>&1; then
+              echo ""
+              echo "--- Program Information ---"
+              sudo bpftool prog show pinned "$PIN_PATH"
+
+              echo ""
+              echo "--- Program Information (JSON) ---"
+              sudo bpftool prog show pinned "$PIN_PATH" -j | jq '.' || true
+
+              # Cleanup
+              sudo rm -f "$PIN_PATH"
+            else
+              echo "WARNING: Could not load $prog for analysis (this may be expected for some programs)"
+            fi
+
+            echo ""
+            echo "--- BTF Information ---"
+            llvm-objdump --section-headers "$prog" 2>/dev/null | grep -E '(\.BTF|\.bss|\.data|\.rodata|\.maps)' || echo "  No BTF sections"
+          done
+
+      - name: Verify map definitions
+        working-directory: src/bng/bpf
+        run: |
+          echo "=== eBPF Map Definition Verification ==="
+
+          for prog in ${{ env.BPF_PROGRAMS }}; do
+            echo ""
+            echo "--- Maps in $prog ---"
+
+            # Extract map section info
+            if llvm-objdump -h "$prog" 2>/dev/null | grep -q '.maps'; then
+              echo "  .maps section found"
+              llvm-objdump -s -j .maps "$prog" 2>/dev/null | head -20 || true
+            else
+              echo "  No .maps section (maps may be defined inline)"
+            fi
+
+            # Try to list maps from loaded program
+            PROG_NAME=$(basename "$prog" .bpf.o)
+            PIN_PATH="/sys/fs/bpf/mapcheck_${PROG_NAME}"
+
+            if sudo bpftool prog load "$prog" "$PIN_PATH" 2>/dev/null; then
+              echo ""
+              echo "  Maps used by program:"
+              sudo bpftool map show | grep -A2 "prog_${PROG_NAME}" || echo "    (maps not individually listed)"
+              sudo rm -f "$PIN_PATH"
+            fi
+          done
+
+      - name: Generate disassembly
+        working-directory: src/bng/bpf
+        run: |
+          echo "=== Generating eBPF Disassembly ==="
+          mkdir -p disasm
+
+          for prog in ${{ env.BPF_PROGRAMS }}; do
+            PROG_NAME=$(basename "$prog" .bpf.o)
+            echo ""
+            echo "Disassembling $prog..."
+
+            # Use llvm-objdump for disassembly
+            llvm-objdump -d "$prog" > "disasm/${PROG_NAME}.dis" 2>&1 || true
+
+            # Show first 50 lines
+            echo "  First 50 lines of disassembly:"
+            head -50 "disasm/${PROG_NAME}.dis" | sed 's/^/    /'
+
+            # Count instructions
+            INSN_COUNT=$(grep -c '^[[:space:]]*[0-9a-f]*:' "disasm/${PROG_NAME}.dis" || echo "0")
+            echo ""
+            echo "  Approximate instruction count: $INSN_COUNT"
+
+            if [ "$INSN_COUNT" -ge 900000 ]; then
+              echo "  WARNING: Approaching 1M instruction limit!"
+            fi
+          done
+
+      - name: Upload analysis artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ebpf-analysis
+          path: |
+            src/bng/bpf/disasm/
+          retention-days: 7
+
+  # Job 5: Summary report
+  summary:
+    name: Summary Report
+    runs-on: ubuntu-22.04
+    needs: [compile-x86_64, compile-arm64, verifier-check, bpftool-analysis]
+    if: always()
+    steps:
+      - name: Generate summary
+        run: |
+          echo "# eBPF Verification Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Job Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Job | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Compile (x86_64) | ${{ needs.compile-x86_64.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Compile (arm64) | ${{ needs.compile-arm64.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Kernel Verifier | ${{ needs.verifier-check.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| bpftool Analysis | ${{ needs.bpftool-analysis.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Programs Verified" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- dhcp_fastpath.bpf.o - DHCP XDP fast path" >> $GITHUB_STEP_SUMMARY
+          echo "- qos_ratelimit.bpf.o - Token bucket rate limiter" >> $GITHUB_STEP_SUMMARY
+          echo "- nat44.bpf.o - CGNAT implementation" >> $GITHUB_STEP_SUMMARY
+          echo "- antispoof.bpf.o - Source address validation" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ "${{ needs.verifier-check.result }}" = "success" ]; then
+            echo "All eBPF programs passed kernel verifier checks." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "**WARNING:** Some verifier checks failed. See job logs for details." >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Check overall status
+        run: |
+          if [ "${{ needs.compile-x86_64.result }}" != "success" ] || \
+             [ "${{ needs.verifier-check.result }}" != "success" ]; then
+            echo "eBPF verification failed"
+            exit 1
+          fi
+          echo "eBPF verification passed"
