@@ -5,7 +5,9 @@ set -e
 # Adapted from predbat-saas-infra with workaround for https://github.com/helm/helm/issues/12010
 
 OUTPUT_DIR=$(mktemp -d)
-TARGET_DIR=$(pwd)
+# Output to charts/ directory at repo root (relative to scripts/)
+TARGET_DIR="$(cd "$(dirname "$0")/.." && pwd)/charts"
+mkdir -p "$TARGET_DIR"
 
 cp helmfile.yaml "$OUTPUT_DIR/"
 

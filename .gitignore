@@ -1,0 +1,24 @@
+# Generated Helm chart templates
+/charts/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build outputs
+/output/
+*.log
+
+# Local environment files
+*.env
+!*.env.example
+
+# Temporary files
+*.tmp
+*.bak
