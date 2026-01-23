@@ -4,12 +4,13 @@ set -e
 # This script uses helmfile to template Helm charts and outputs them to the current directory
 # Adapted from predbat-saas-infra with workaround for https://github.com/helm/helm/issues/12010
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 OUTPUT_DIR=$(mktemp -d)
 # Output to charts/ directory at repo root (relative to scripts/)
-TARGET_DIR="$(cd "$(dirname "$0")/.." && pwd)/charts"
+TARGET_DIR="$(cd "$SCRIPT_DIR/.." && pwd)/charts"
 mkdir -p "$TARGET_DIR"
 
-cp helmfile.yaml "$OUTPUT_DIR/"
+cp "$SCRIPT_DIR/helmfile.yaml" "$OUTPUT_DIR/"
 
 cd $OUTPUT_DIR
 
@@ -35,6 +36,22 @@ find "$OUTPUT_DIR" -mindepth 2 -type f | while read -r file; do
     mkdir -p "$target_dir"
     # Copy the file to the target directory
     cp "$file" "$target_file"
+done
+
+# Generate kustomization.yaml for each chart directory
+for chart_dir in "$TARGET_DIR"/*/; do
+    chart_name=$(basename "$chart_dir")
+    kust_file="$chart_dir/kustomization.yaml"
+
+    echo "apiVersion: kustomize.config.k8s.io/v1beta1" > "$kust_file"
+    echo "kind: Kustomization" >> "$kust_file"
+    echo "resources:" >> "$kust_file"
+
+    # Add all yaml files recursively
+    find "$chart_dir" -name "*.yaml" -not -name "kustomization.yaml" | sort | while read -r yaml_file; do
+        rel_path="${yaml_file#$chart_dir}"
+        echo "  - $rel_path" >> "$kust_file"
+    done
 done
 
 echo "✓ Helmfile templates generated successfully"

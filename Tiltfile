@@ -18,12 +18,11 @@ BNG Edge Infrastructure - Local Development
 # Only allow k3d-bng-edge context
 allow_k8s_contexts('k3d-bng-edge')
 
-# Docker prune settings
+# Docker prune settings (prune after 5 builds, keep images < 2hrs old)
 docker_prune_settings(
     disable=False,
     max_age_mins=120,
     num_builds=5,
-    interval_hrs=1,
     keep_recent=2
 )
 
@@ -40,7 +39,8 @@ local_resource(
 
 local_resource(
     'k3d-wait',
-    cmd='kubectl wait --for=condition=ready node --all --timeout=120s',
+    # Wait for API server only - nodes won't be ready until CNI is installed
+    cmd='kubectl cluster-info && kubectl get nodes',
     resource_deps=['k3d-cluster'],
     labels=['infrastructure'],
 )
@@ -69,7 +69,7 @@ if os.path.exists('src/bng/Dockerfile'):
         dockerfile='src/bng/Dockerfile',
     )
 
-    k8s_yaml('components/bng/')
+    k8s_yaml(kustomize('components/bng'))
 
     k8s_resource(
         'bng',
@@ -91,7 +91,7 @@ if os.path.exists('src/nexus/Dockerfile'):
         dockerfile='src/nexus/Dockerfile',
     )
 
-    k8s_yaml('components/nexus/')
+    k8s_yaml(kustomize('components/nexus'))
 
     k8s_resource(
         'nexus',

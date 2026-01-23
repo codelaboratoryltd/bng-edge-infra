@@ -1,7 +1,8 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
-namespace: default
+# Note: Don't set namespace here - let resources use their declared namespaces
+# (Cilium → kube-system, Prometheus/Grafana → monitoring)
 
 resources:
   # Helm charts templated via helmfile
@@ -12,6 +13,5 @@ resources:
   # BNG components (to be added later)
   # - ../../components/bng
 
-# Create monitoring namespace
-namespaces:
-  - monitoring
+  # Namespace for monitoring stack
+  - namespace-monitoring.yaml
