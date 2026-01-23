@@ -70,11 +70,18 @@ git submodule update --init --recursive
 
 ### Start Local Development
 
+**Option 1: Using Tilt (recommended for development)**
 ```bash
 tilt up
 ```
 
-This will:
+**Option 2: Create cluster first, then Tilt**
+```bash
+./scripts/init.sh   # Creates k3d cluster only
+tilt up             # Installs everything else
+```
+
+Tilt will:
 1. Create a k3d cluster (`bng-edge`) with Cilium CNI
 2. Generate Helm templates via helmfile
 3. Install Cilium, Prometheus, Grafana, Hubble
