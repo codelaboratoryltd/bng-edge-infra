@@ -15,6 +15,9 @@ BNG Edge Infrastructure - Local Development
 -----------------------------------------------------------------
 """.strip())
 
+# Add SSH keys for private repo access during Docker builds
+local('ssh-add $HOME/.ssh/id_*[^pub] 2>/dev/null || true')
+
 # Only allow k3d-bng-edge context
 allow_k8s_contexts('k3d-bng-edge')
 
@@ -67,6 +70,7 @@ if os.path.exists('src/bng/Dockerfile'):
         'ghcr.io/codelaboratoryltd/bng',
         'src/bng',
         dockerfile='src/bng/Dockerfile',
+        ssh='default',
     )
 
     k8s_yaml(kustomize('components/bng'))
@@ -89,6 +93,7 @@ if os.path.exists('src/nexus/Dockerfile'):
         'ghcr.io/codelaboratoryltd/nexus',
         'src/nexus',
         dockerfile='src/nexus/Dockerfile',
+        ssh='default',
     )
 
     k8s_yaml(kustomize('components/nexus'))
