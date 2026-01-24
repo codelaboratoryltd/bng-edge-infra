@@ -44,7 +44,7 @@ docker_prune_settings(
 
 local_resource(
     'k3d-cluster',
-    cmd='k3d cluster create -c clusters/local-dev/k3d-config.yaml 2>/dev/null || k3d cluster start bng-edge 2>/dev/null || true',
+    cmd='k3d cluster create -c clusters/local-dev/k3d-config.yaml 2>/dev/null || k3d cluster start bng-edge 2>/dev/null || true; k3d kubeconfig merge bng-edge -d 2>/dev/null || true',
     deps=['clusters/local-dev/k3d-config.yaml'],
     labels=['infrastructure'],
 )
