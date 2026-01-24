@@ -50,7 +50,7 @@ spec:
     spec:
       containers:
         - name: nexus
-          image: k3d-bng-edge-registry:5000/ghcr.io_codelaboratoryltd_nexus:tilt-3bf6cfaba6a05953
+          image: ghcr.io/codelaboratoryltd/nexus:latest
           args:
             - "serve"
             - "--http-port=9000"
@@ -223,7 +223,7 @@ spec:
   containers:
     # BNG with Nexus integration
     - name: bng
-      image: k3d-bng-edge-registry:5000/ghcr.io_codelaboratoryltd_bng:tilt-0fb973315f4309b3
+      image: ghcr.io/codelaboratoryltd/bng:latest
       args:
         - "run"
         - "--interface=veth-bng"

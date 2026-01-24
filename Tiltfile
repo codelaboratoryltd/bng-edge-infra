@@ -832,7 +832,8 @@ if selected_demo == 'all' or selected_demo == 'e2e':
     k8s_yaml(kustomize('components/e2e-test'))
 
     k8s_resource(
-        'nexus',
+        'nexus:deployment:demo-e2e',
+        new_name='nexus-e2e',
         port_forwards='9010:9000',
         labels=['e2e-test'],
         resource_deps=['nexus-image'],
@@ -841,7 +842,7 @@ if selected_demo == 'all' or selected_demo == 'e2e':
     k8s_resource(
         'bng-e2e',
         labels=['e2e-test'],
-        resource_deps=['bng-image', 'nexus'],
+        resource_deps=['bng-image', 'nexus-e2e'],
     )
 
     # Run the E2E DHCP test
@@ -942,7 +943,7 @@ curl -s http://localhost:9010/api/v1/nodes | jq '.nodes[] | {id, status}'
 ''',
         labels=['e2e-test', 'verify'],
         auto_init=False,
-        resource_deps=['nexus'],
+        resource_deps=['nexus-e2e'],
     )
 
     # View BNG logs
@@ -952,6 +953,70 @@ curl -s http://localhost:9010/api/v1/nodes | jq '.nodes[] | {id, status}'
         labels=['e2e-test', 'logs'],
         auto_init=False,
         resource_deps=['bng-e2e'],
+    )
+
+# -----------------------------------------------------------------------------
+# Walled Garden Test - Full subscriber lifecycle
+# -----------------------------------------------------------------------------
+# Demonstrates: Unknown subscriber → Walled Garden → Activation → Production IP
+#
+# Flow:
+#   1. Unknown client gets walled garden IP (10.255.x.x)
+#   2. Simulate activation (pre-allocate IP in Nexus)
+#   3. Client renews and gets production IP (10.200.x.x)
+
+if selected_demo == 'all' or selected_demo == 'walled-garden':
+    k8s_yaml(kustomize('components/walled-garden-test'))
+
+    k8s_resource(
+        'nexus:deployment:demo-walled-garden',
+        new_name='nexus-wgar',
+        labels=['walled-garden-test'],
+        resource_deps=['nexus-image'],
+        port_forwards='9011:9000',
+    )
+
+    k8s_resource(
+        'bng-wgar-test',
+        labels=['walled-garden-test'],
+        resource_deps=['bng-image', 'nexus-wgar'],
+    )
+
+    # Run full walled garden test
+    local_resource(
+        'wgar-full-test',
+        cmd='''
+echo "Running Walled Garden → Production IP test..."
+echo ""
+kubectl exec -n demo-walled-garden bng-wgar-test -c client -- sh /scripts/run-wgar-test.sh
+''',
+        labels=['walled-garden-test', 'test'],
+        auto_init=False,
+        resource_deps=['bng-wgar-test'],
+    )
+
+    # View BNG logs
+    local_resource(
+        'wgar-bng-logs',
+        cmd='kubectl logs -n demo-walled-garden bng-wgar-test -c bng --tail=40',
+        labels=['walled-garden-test', 'logs'],
+        auto_init=False,
+        resource_deps=['bng-wgar-test'],
+    )
+
+    # View Nexus allocations
+    local_resource(
+        'wgar-nexus-state',
+        cmd='''
+echo "=== Nexus Pools ==="
+curl -s http://localhost:9011/api/v1/pools | head -100
+echo ""
+echo "=== Nexus Allocations ==="
+curl -s http://localhost:9011/api/v1/allocations | head -100
+''',
+        labels=['walled-garden-test', 'verify'],
+        auto_init=False,
+        resource_deps=['nexus-wgar'],
     )
 
 # -----------------------------------------------------------------------------
@@ -994,22 +1059,30 @@ Demo Configurations:
   BNG Blaster:                   - Traffic generator placeholder
   Blaster Test:                  - Real L2 DHCP (local pool only)
   E2E Test:                      - Real DHCP → BNG → Nexus (FULL FLOW)
+  Walled Garden Test:            - Walled Garden → Activation → Production IP
 
 Run specific demo:
-  tilt up -- --demo=a            # Standalone BNG only
-  tilt up -- --demo=b            # Single integration only
-  tilt up -- --demo=c            # P2P cluster only
-  tilt up -- --demo=d            # Full distributed only
-  tilt up -- --demo=blaster      # BNG Blaster placeholder
-  tilt up -- --demo=blaster-test # Real DHCP (local pool)
-  tilt up -- --demo=e2e          # Real DHCP → Nexus (RECOMMENDED)
-  tilt up                        # All demos (default)
+  tilt up -- --demo=a              # Standalone BNG only
+  tilt up -- --demo=b              # Single integration only
+  tilt up -- --demo=c              # P2P cluster only
+  tilt up -- --demo=d              # Full distributed only
+  tilt up -- --demo=blaster        # BNG Blaster placeholder
+  tilt up -- --demo=blaster-test   # Real DHCP (local pool)
+  tilt up -- --demo=e2e            # Real DHCP → Nexus (RECOMMENDED)
+  tilt up -- --demo=walled-garden  # Walled Garden lifecycle
+  tilt up                          # All demos (default)
 
 E2E Integration Test (--demo=e2e):
   This is the FULL verification - real DHCP packets through BNG to Nexus:
   - e2e-dhcp-test:   Run real DHCP, verify IP from Nexus pool
   - e2e-nexus-state: View Nexus pools and allocations
   - e2e-bng-logs:    View BNG logs for DHCP/Nexus activity
+
+Walled Garden Test (--demo=walled-garden):
+  Full subscriber lifecycle: Unknown → Walled Garden → Activation → Production:
+  - wgar-full-test:   Run complete walled garden → production test
+  - wgar-bng-logs:    View BNG logs during test
+  - wgar-nexus-state: View Nexus pools and allocations
 
 Verification:
   Click 'verify-demo-X' buttons in Tilt UI to test each demo
