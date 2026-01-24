@@ -13,7 +13,7 @@ bng-edge-infra/
 ├── components/
 │   ├── bng/             # BNG K8s manifests
 │   └── nexus/           # Nexus K8s manifests
-├── charts/              # Generated Helm templates (gitignored)
+├── charts/              # Generated Helm templates (committed for diff visibility)
 ├── src/
 │   ├── bng/             # SUBMODULE: OLT-BNG source
 │   └── nexus/           # SUBMODULE: Nexus source
@@ -148,28 +148,6 @@ Reset the cluster:
 ```bash
 k3d cluster delete bng-edge
 tilt up
-```
-
-### Helmfile Errors
-
-If helmfile fails, ensure helm repos are added:
-```bash
-helm repo add cilium https://helm.cilium.io/
-helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
-helm repo add grafana https://grafana.github.io/helm-charts
-helm repo update
-```
-
-## Flux GitOps (Staging/Production)
-
-For staging/production, use Flux to watch this repo:
-
-```bash
-flux bootstrap github \
-  --owner=codelaboratoryltd \
-  --repository=bng-edge-infra \
-  --path=clusters/staging \
-  --personal
 ```
 
 ## Application Repos
