@@ -12,7 +12,10 @@ bng-edge-infra/
 │   └── production/      # Production cluster (Flux)
 ├── components/
 │   ├── bng/             # BNG K8s manifests
-│   └── nexus/           # Nexus K8s manifests
+│   ├── nexus/           # Nexus K8s manifests
+│   ├── e2e-test/        # E2E integration test (DHCP → BNG → Nexus)
+│   ├── blaster-test/    # L2 DHCP test with veth pairs
+│   └── bngblaster/      # BNG Blaster traffic generator
 ├── charts/              # Generated Helm templates (committed for diff visibility)
 ├── src/
 │   ├── bng/             # SUBMODULE: OLT-BNG source
@@ -93,11 +96,34 @@ Tilt will:
 | Service | URL | Notes |
 |---------|-----|-------|
 | Tilt UI | http://localhost:10350 | Development dashboard |
-| BNG API | http://localhost:8080 | BNG REST API |
+| BNG API | http://localhost:8080 | BNG REST API (Demo A) |
 | Nexus API | http://localhost:9000 | Nexus REST API |
 | Hubble UI | http://localhost:12000 | Network observability |
 | Prometheus | http://localhost:9090 | Metrics |
 | Grafana | http://localhost:3000 | Dashboards (admin/admin) |
+
+## Demo Scenarios
+
+The Tiltfile includes multiple demo configurations:
+
+| Demo | Description | Nexus Port | BNG Port |
+|------|-------------|------------|----------|
+| **A: Standalone** | Single BNG with local pool | - | 8080 |
+| **B: Single Nexus** | BNG + single Nexus server | 9001 | 8081 |
+| **C: P2P Cluster** | 3-node Nexus P2P cluster | 9002 | - |
+| **D: Distributed** | Multi-BNG + Nexus integration | 9003 | 8083 |
+
+### Integration Tests
+
+| Test | Description | Namespace |
+|------|-------------|-----------|
+| **E2E Test** | Real DHCP → BNG → Nexus flow | demo-e2e |
+| **Blaster Test** | L2 DHCP with veth pairs | demo-blaster-test |
+
+Run tests via Tilt UI buttons:
+- `e2e-dhcp-test`: Full E2E DHCP verification
+- `dhcp-single-test`: Single DHCP client test
+- `dhcp-stress-test`: Multi-client stress test
 
 ### Stop / Restart
 

@@ -190,18 +190,31 @@ See `charts/helmfile.yaml` for full configuration.
 - [x] Tilt for development orchestration
 - [x] Observability stack (Hubble, Prometheus, Grafana)
 
-### Phase 2: eBPF Development (Next)
+### Phase 2: eBPF Development ✓
 
-- [ ] eBPF build environment (Dockerfile.ebpf-builder)
-- [ ] eBPF program skeleton (bpf/dhcp_fastpath.c)
-- [ ] BNG Go application (cmd/bng/)
-- [ ] Docker build integration with Tilt
+- [x] eBPF build environment (Dockerfile.ebpf-builder)
+- [x] eBPF program skeleton (bpf/dhcp_fastpath.c)
+- [x] BNG Go application (cmd/bng/)
+- [x] Docker build integration with Tilt
 
-### Phase 3: DHCP POC
+### Phase 3: DHCP POC ✓
 
-- [ ] DHCP fast path implementation
-- [ ] DHCP slow path implementation
-- [ ] Testing with real DHCP client
+- [x] DHCP fast path implementation
+- [x] DHCP slow path implementation
+- [x] Testing with real DHCP client
+
+### Phase 4: Nexus Integration ✓
+
+- [x] Nexus deployment and pool configuration
+- [x] BNG --nexus-url integration
+- [x] E2E test (Real DHCP → BNG → Nexus)
+- [x] TTL-based allocations and renewal
+
+### Phase 5: HA and Distributed ✓
+
+- [x] HA pair flags (--ha-peer, --ha-role)
+- [x] P2P state sync
+- [x] Distributed pool coordination
 
 ## Notes
 
