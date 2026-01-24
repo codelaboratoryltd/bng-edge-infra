@@ -1,0 +1,202 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: demo-blaster-test
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: test-scripts
+  namespace: demo-blaster-test
+data:
+  setup-network.sh: |
+    #!/bin/sh
+    set -e
+    echo "Setting up veth pair for L2 connectivity..."
+
+    # Create veth pair: veth-bng <-> veth-client
+    ip link add veth-bng type veth peer name veth-client
+
+    # Configure BNG side
+    ip addr add 10.100.0.1/24 dev veth-bng
+    ip link set veth-bng up
+
+    # Configure client side (no IP - will get via DHCP)
+    ip link set veth-client up
+
+    echo "Network setup complete:"
+    echo "  veth-bng:    10.100.0.1/24 (BNG DHCP server)"
+    echo "  veth-client: (awaiting DHCP)"
+    ip link show veth-bng
+    ip link show veth-client
+
+  run-dhcp-test.sh: |
+    #!/bin/sh
+    set -e
+
+    echo "=== DHCP Client Test ==="
+    echo "Requesting IP via DHCP on veth-client..."
+
+    # Run udhcpc to get an IP
+    udhcpc -i veth-client -n -q -t 5 -T 3 -f -s /etc/udhcpc/simple.script 2>&1 || {
+      echo "DHCP request failed - this is expected if BNG isn't responding"
+      echo "Check BNG logs for DHCP server status"
+      exit 1
+    }
+
+    echo ""
+    echo "=== Result ==="
+    ip addr show veth-client
+
+    # Test connectivity
+    echo ""
+    echo "=== Connectivity Test ==="
+    ping -c 3 10.100.0.1 || echo "Ping failed"
+
+  multi-client-test.sh: |
+    #!/bin/sh
+    set -e
+
+    echo "=== Multi-Client DHCP Stress Test ==="
+
+    CLIENTS=${1:-10}
+    echo "Creating $CLIENTS virtual clients..."
+
+    for i in $(seq 1 $CLIENTS); do
+      VETH="veth-c$i"
+      MAC=$(printf '02:00:00:00:%02x:%02x' $((i / 256)) $((i % 256)))
+
+      # Create veth pair
+      ip link add $VETH type veth peer name ${VETH}-bng
+      ip link set ${VETH}-bng master br-test 2>/dev/null || true
+      ip link set $VETH address $MAC
+      ip link set $VETH up
+      ip link set ${VETH}-bng up
+
+      echo "Created client $i: $VETH ($MAC)"
+    done
+
+    echo ""
+    echo "Running DHCP requests..."
+
+    SUCCESS=0
+    FAILED=0
+    START=$(date +%s%N)
+
+    for i in $(seq 1 $CLIENTS); do
+      VETH="veth-c$i"
+      if timeout 5 udhcpc -i $VETH -n -q -t 3 -T 1 -f -s /etc/udhcpc/simple.script 2>/dev/null; then
+        SUCCESS=$((SUCCESS + 1))
+        IP=$(ip addr show $VETH | grep 'inet ' | awk '{print $2}')
+        echo "  Client $i: $IP"
+      else
+        FAILED=$((FAILED + 1))
+        echo "  Client $i: FAILED"
+      fi
+    done
+
+    END=$(date +%s%N)
+    DURATION=$(( (END - START) / 1000000 ))
+
+    echo ""
+    echo "=== Results ==="
+    echo "Total clients: $CLIENTS"
+    echo "Successful:    $SUCCESS"
+    echo "Failed:        $FAILED"
+    echo "Duration:      ${DURATION}ms"
+    echo "Rate:          $(( SUCCESS * 1000 / DURATION )) sessions/sec"
+
+  simple.script: |
+    #!/bin/sh
+    # Minimal udhcpc script
+    case "$1" in
+      bound|renew)
+        ip addr add $ip/$mask dev $interface 2>/dev/null || true
+        if [ -n "$router" ]; then
+          ip route add default via $router dev $interface 2>/dev/null || true
+        fi
+        ;;
+    esac
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: bng-dhcp-test
+  namespace: demo-blaster-test
+  labels:
+    app: bng-dhcp-test
+spec:
+  # Shared network namespace between containers
+  shareProcessNamespace: true
+
+  initContainers:
+    # Setup network before BNG starts
+    - name: network-setup
+      image: alpine:3.19
+      command: ["/bin/sh", "-c"]
+      args:
+        - |
+          apk add --no-cache iproute2
+
+          # Create veth pair (direct L2 connection for DHCP)
+          ip link add veth-bng type veth peer name veth-client
+          ip addr add 10.100.0.1/24 dev veth-bng
+          ip link set veth-bng up
+          ip link set veth-client up
+
+          echo "Network setup complete - direct veth pair"
+          ip link show veth-bng
+          ip link show veth-client
+      securityContext:
+        privileged: true
+        capabilities:
+          add: ["NET_ADMIN", "NET_RAW"]
+
+  containers:
+    # BNG DHCP Server
+    - name: bng
+      image: ghcr.io/codelaboratoryltd/bng:latest
+      args:
+        - "run"
+        - "--interface=veth-bng"
+        - "--pool-network=10.100.0.0/24"
+        - "--pool-gateway=10.100.0.1"
+        - "--pool-dns=8.8.8.8"
+        - "--lease-time=1h"
+        - "--log-level=debug"
+      securityContext:
+        privileged: true
+        capabilities:
+          add: ["NET_ADMIN", "NET_RAW", "SYS_ADMIN"]
+
+    # Test client container
+    - name: client
+      image: alpine:3.19
+      command: ["sleep", "infinity"]
+      securityContext:
+        privileged: true
+        capabilities:
+          add: ["NET_ADMIN", "NET_RAW"]
+      volumeMounts:
+        - name: scripts
+          mountPath: /scripts
+          readOnly: true
+
+  volumes:
+    - name: scripts
+      configMap:
+        name: test-scripts
+        defaultMode: 0755
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: bng-dhcp-test
+  namespace: demo-blaster-test
+spec:
+  selector:
+    app: bng-dhcp-test
+  ports:
+    - port: 8080
+      targetPort: 8080
+      name: api

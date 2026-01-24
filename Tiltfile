@@ -20,7 +20,7 @@ BNG Edge Infrastructure - Local Development
 """.strip())
 
 # Configuration
-config.define_string('demo', usage='Demo to run: a, b, c, d, or all (default: all)')
+config.define_string('demo', usage='Demo to run: a, b, c, d, blaster, or all (default: all)')
 cfg = config.parse()
 selected_demo = cfg.get('demo', 'all')
 
@@ -95,6 +95,14 @@ if os.path.exists('src/nexus/Dockerfile'):
 else:
     print("WARNING: src/nexus submodule not found. Run: git submodule update --init")
 
+# Build BNG Blaster image (traffic generator)
+if os.path.exists('components/bngblaster/Dockerfile'):
+    docker_build(
+        'ghcr.io/codelaboratoryltd/bngblaster',
+        'components/bngblaster',
+        dockerfile='components/bngblaster/Dockerfile',
+    )
+
 # -----------------------------------------------------------------------------
 # Demo Configurations
 # -----------------------------------------------------------------------------
@@ -105,6 +113,7 @@ DEMO_PORTS = {
     'b': {'bng': 8081, 'nexus': 9001},
     'c': {'bng': None, 'nexus': 9002},
     'd': {'bng': 8083, 'nexus': 9003},
+    'blaster': {'bng': None, 'nexus': None, 'blaster': 8001},
 }
 
 # Helper: Create namespace YAML
@@ -628,6 +637,324 @@ curl -s http://localhost:8083/api/v1/sessions | jq '.count'
     )
 
 # -----------------------------------------------------------------------------
+# BNG Blaster - Traffic Generator for Testing
+# -----------------------------------------------------------------------------
+
+if selected_demo == 'all' or selected_demo == 'blaster':
+    # Create namespace
+    k8s_yaml(namespace_yaml('demo-blaster'))
+
+    # BNG Blaster Deployment
+    k8s_yaml(kustomize('components/bngblaster'))
+
+    k8s_resource(
+        'bngblaster',
+        objects=['bngblaster-config:configmap'],
+        resource_deps=['helmfile-hydrate'],
+        labels=['blaster'],
+    )
+
+    # Interactive test buttons
+    local_resource(
+        'blaster-ipoe-test',
+        cmd='''
+kubectl exec -n demo-blaster deploy/bngblaster -- \
+  bngblaster -C /etc/bngblaster/ipoe.json -T 2>&1 || \
+  echo "Note: BNG Blaster requires actual network connectivity to BNG. Use for integration testing."
+''',
+        labels=['blaster', 'test'],
+        auto_init=False,
+        resource_deps=['bngblaster'],
+    )
+
+    local_resource(
+        'blaster-pppoe-test',
+        cmd='''
+kubectl exec -n demo-blaster deploy/bngblaster -- \
+  bngblaster -C /etc/bngblaster/pppoe.json -T 2>&1 || \
+  echo "Note: BNG Blaster requires actual network connectivity to BNG. Use for integration testing."
+''',
+        labels=['blaster', 'test'],
+        auto_init=False,
+        resource_deps=['bngblaster'],
+    )
+
+    local_resource(
+        'blaster-dhcp-stress',
+        cmd='''
+kubectl exec -n demo-blaster deploy/bngblaster -- \
+  bngblaster -C /etc/bngblaster/dhcp-stress.json -T 2>&1 || \
+  echo "Note: BNG Blaster requires actual network connectivity to BNG. Use for integration testing."
+''',
+        labels=['blaster', 'test'],
+        auto_init=False,
+        resource_deps=['bngblaster'],
+    )
+
+# -----------------------------------------------------------------------------
+# Realistic DHCP Test (L2 connected BNG + client)
+# -----------------------------------------------------------------------------
+
+if selected_demo == 'all' or selected_demo == 'blaster-test':
+    k8s_yaml(kustomize('components/blaster-test'))
+
+    k8s_resource(
+        'bng-dhcp-test',
+        port_forwards='8090:8080',
+        labels=['blaster-test'],
+        resource_deps=['bng-image'],
+    )
+
+    # Single DHCP request test
+    local_resource(
+        'dhcp-single-test',
+        cmd='''
+echo "=== Single DHCP Request Test ==="
+kubectl exec -n demo-blaster-test bng-dhcp-test -c client -- sh -c '
+  apk add --no-cache busybox-extras iproute2 > /dev/null 2>&1 || true
+
+  # Setup udhcpc script
+  mkdir -p /etc/udhcpc
+  cat > /etc/udhcpc/simple.script << "SCRIPT"
+#!/bin/sh
+case "$1" in
+  bound|renew)
+    ip addr add $ip/$mask dev $interface 2>/dev/null || true
+    echo "Got IP: $ip/$mask via $interface"
+    ;;
+esac
+SCRIPT
+  chmod +x /etc/udhcpc/simple.script
+
+  echo "Requesting DHCP lease on veth-client..."
+  udhcpc -i veth-client -n -q -t 5 -T 3 -f -s /etc/udhcpc/simple.script 2>&1
+
+  echo ""
+  echo "Interface status:"
+  ip addr show veth-client | grep inet
+'
+''',
+        labels=['blaster-test', 'test'],
+        auto_init=False,
+        resource_deps=['bng-dhcp-test'],
+    )
+
+    # Multi-client stress test
+    local_resource(
+        'dhcp-stress-test',
+        cmd='''
+echo "=== Multi-Client DHCP Stress Test ==="
+kubectl exec -n demo-blaster-test bng-dhcp-test -c client -- sh -c '
+  apk add --no-cache busybox-extras iproute2 > /dev/null 2>&1 || true
+
+  mkdir -p /etc/udhcpc
+  cat > /etc/udhcpc/simple.script << "SCRIPT"
+#!/bin/sh
+case "$1" in
+  bound|renew) ip addr add $ip/$mask dev $interface 2>/dev/null || true ;;
+esac
+SCRIPT
+  chmod +x /etc/udhcpc/simple.script
+
+  CLIENTS=10
+  SUCCESS=0
+  FAILED=0
+
+  echo "Creating $CLIENTS virtual clients..."
+  for i in $(seq 1 $CLIENTS); do
+    VETH="veth-c$i"
+    MAC=$(printf "02:00:00:00:%02x:%02x" $((i / 256)) $((i % 256)))
+
+    ip link add $VETH type veth peer name ${VETH}-peer 2>/dev/null || continue
+    ip link set $VETH address $MAC
+    ip link set $VETH up
+    ip link set ${VETH}-peer up
+  done
+
+  echo "Running DHCP requests..."
+  START=$(date +%s)
+
+  for i in $(seq 1 $CLIENTS); do
+    VETH="veth-c$i"
+    if timeout 5 udhcpc -i $VETH -n -q -t 3 -T 1 -f -s /etc/udhcpc/simple.script 2>/dev/null; then
+      SUCCESS=$((SUCCESS + 1))
+      IP=$(ip addr show $VETH 2>/dev/null | grep "inet " | cut -d" " -f6)
+      echo "  Client $i: $IP"
+    else
+      FAILED=$((FAILED + 1))
+    fi
+  done
+
+  END=$(date +%s)
+  DURATION=$((END - START))
+  [ $DURATION -eq 0 ] && DURATION=1
+
+  echo ""
+  echo "=== Results ==="
+  echo "Successful: $SUCCESS / $CLIENTS"
+  echo "Failed:     $FAILED"
+  echo "Duration:   ${DURATION}s"
+  echo "Rate:       $((SUCCESS / DURATION)) sessions/sec"
+'
+''',
+        labels=['blaster-test', 'test'],
+        auto_init=False,
+        resource_deps=['bng-dhcp-test'],
+    )
+
+    # Check BNG sessions
+    local_resource(
+        'dhcp-check-sessions',
+        cmd='''
+echo "=== BNG DHCP Sessions ==="
+curl -s http://localhost:8090/api/v1/sessions | jq '{
+  count,
+  sessions: [.sessions[]? | {subscriber_id, ipv4, state, mac}]
+}'
+''',
+        labels=['blaster-test', 'verify'],
+        auto_init=False,
+        resource_deps=['bng-dhcp-test'],
+    )
+
+# -----------------------------------------------------------------------------
+# E2E Integration Test (Real DHCP → BNG → Nexus → Hashring)
+# -----------------------------------------------------------------------------
+# This demonstrates the FULL flow:
+# 1. Real DHCP client sends DISCOVER
+# 2. BNG receives packet (eBPF slow path)
+# 3. BNG requests IP from Nexus via HTTP
+# 4. Nexus allocates via hashring
+# 5. BNG sends OFFER/ACK with Nexus-allocated IP
+# 6. Client gets IP from Nexus pool (10.200.x.x)
+
+if selected_demo == 'all' or selected_demo == 'e2e':
+    k8s_yaml(kustomize('components/e2e-test'))
+
+    k8s_resource(
+        'nexus',
+        port_forwards='9010:9000',
+        labels=['e2e-test'],
+        resource_deps=['nexus-image'],
+    )
+
+    k8s_resource(
+        'bng-e2e',
+        labels=['e2e-test'],
+        resource_deps=['bng-image', 'nexus'],
+    )
+
+    # Run the E2E DHCP test
+    local_resource(
+        'e2e-dhcp-test',
+        cmd='''
+echo "============================================"
+echo "  E2E Integration Test: DHCP → BNG → Nexus"
+echo "============================================"
+echo ""
+
+# Step 1: Verify Nexus pool exists
+echo "Step 1: Checking Nexus pool..."
+POOL=$(curl -s http://localhost:9010/api/v1/pools | jq -r '.pools[0].id // "none"')
+if [ "$POOL" = "e2e-pool" ]; then
+  echo "  ✓ Pool 'e2e-pool' exists in Nexus"
+else
+  echo "  ✗ Pool not found. Creating..."
+  curl -s -X POST http://localhost:9010/api/v1/pools \
+    -H "Content-Type: application/json" \
+    -d '{"id":"e2e-pool","cidr":"10.200.0.0/16","prefix":32}' > /dev/null
+fi
+echo ""
+
+# Step 2: Run DHCP request from client
+echo "Step 2: Running DHCP request from client..."
+kubectl exec -n demo-e2e bng-e2e -c client -- sh -c '
+  mkdir -p /etc/udhcpc
+  cat > /etc/udhcpc/simple.script << "EOF"
+#!/bin/sh
+case "$1" in
+  bound|renew)
+    ip addr flush dev $interface 2>/dev/null
+    ip addr add $ip/$mask dev $interface
+    echo "SUCCESS: Got IP $ip from DHCP"
+    ;;
+esac
+EOF
+  chmod +x /etc/udhcpc/simple.script
+
+  # Clear any existing IP
+  ip addr flush dev veth-client 2>/dev/null || true
+
+  echo "  Sending DHCP DISCOVER..."
+  udhcpc -i veth-client -n -q -t 5 -T 2 -f -s /etc/udhcpc/simple.script 2>&1
+'
+echo ""
+
+# Step 3: Verify client got IP from Nexus pool
+echo "Step 3: Verifying client IP..."
+CLIENT_IP=$(kubectl exec -n demo-e2e bng-e2e -c client -- ip addr show veth-client 2>/dev/null | grep "inet " | awk '{print $2}' | cut -d/ -f1)
+echo "  Client IP: $CLIENT_IP"
+echo ""
+
+# Step 4: Check Nexus allocation
+echo "Step 4: Checking Nexus allocations..."
+curl -s http://localhost:9010/api/v1/allocations | jq '.allocations[] | {subscriber_id, ip, pool_id}' 2>/dev/null || echo "  No allocations found"
+echo ""
+
+# Step 5: Verify IP is from Nexus pool
+echo "Step 5: Verification..."
+case "$CLIENT_IP" in
+  10.200.*)
+    echo "  ✓ PASS: Client IP $CLIENT_IP is from Nexus pool (10.200.0.0/16)"
+    echo ""
+    echo "  Flow verified:"
+    echo "    DHCP DISCOVER → BNG → Nexus allocation → DHCP OFFER/ACK"
+    ;;
+  "")
+    echo "  ✗ FAIL: No IP assigned to client"
+    ;;
+  *)
+    echo "  ✗ FAIL: Client IP $CLIENT_IP is NOT from Nexus pool"
+    ;;
+esac
+echo ""
+echo "============================================"
+''',
+        labels=['e2e-test', 'test'],
+        auto_init=False,
+        resource_deps=['bng-e2e'],
+    )
+
+    # View Nexus state
+    local_resource(
+        'e2e-nexus-state',
+        cmd='''
+echo "=== Nexus State ==="
+echo ""
+echo "Pools:"
+curl -s http://localhost:9010/api/v1/pools | jq '.pools[] | {id, cidr, prefix}'
+echo ""
+echo "Allocations:"
+curl -s http://localhost:9010/api/v1/allocations | jq '.allocations[] | {subscriber_id, ip, pool_id, allocated_at}'
+echo ""
+echo "Nodes:"
+curl -s http://localhost:9010/api/v1/nodes | jq '.nodes[] | {id, status}'
+''',
+        labels=['e2e-test', 'verify'],
+        auto_init=False,
+        resource_deps=['nexus'],
+    )
+
+    # View BNG logs
+    local_resource(
+        'e2e-bng-logs',
+        cmd='kubectl logs -n demo-e2e bng-e2e -c bng --tail=30',
+        labels=['e2e-test', 'logs'],
+        auto_init=False,
+        resource_deps=['bng-e2e'],
+    )
+
+# -----------------------------------------------------------------------------
 # Infrastructure Components (Observability)
 # -----------------------------------------------------------------------------
 
@@ -660,17 +987,29 @@ print("""
 Tiltfile loaded.
 
 Demo Configurations:
-  Demo A: Standalone BNG         - http://localhost:8080 (BNG only)
+  Demo A: Standalone BNG         - http://localhost:8080 (BNG only, simulated)
   Demo B: Single Integration     - http://localhost:9001 (Nexus), http://localhost:8081 (BNG)
   Demo C: Nexus P2P Cluster      - http://localhost:9002 (Nexus x3 with mDNS)
   Demo D: Full Distributed       - http://localhost:9003 (Nexus x3), http://localhost:8083 (BNG x2)
+  BNG Blaster:                   - Traffic generator placeholder
+  Blaster Test:                  - Real L2 DHCP (local pool only)
+  E2E Test:                      - Real DHCP → BNG → Nexus (FULL FLOW)
 
 Run specific demo:
-  tilt up -- --demo=a    # Standalone BNG only
-  tilt up -- --demo=b    # Single integration only
-  tilt up -- --demo=c    # P2P cluster only
-  tilt up -- --demo=d    # Full distributed only
-  tilt up                # All demos (default)
+  tilt up -- --demo=a            # Standalone BNG only
+  tilt up -- --demo=b            # Single integration only
+  tilt up -- --demo=c            # P2P cluster only
+  tilt up -- --demo=d            # Full distributed only
+  tilt up -- --demo=blaster      # BNG Blaster placeholder
+  tilt up -- --demo=blaster-test # Real DHCP (local pool)
+  tilt up -- --demo=e2e          # Real DHCP → Nexus (RECOMMENDED)
+  tilt up                        # All demos (default)
+
+E2E Integration Test (--demo=e2e):
+  This is the FULL verification - real DHCP packets through BNG to Nexus:
+  - e2e-dhcp-test:   Run real DHCP, verify IP from Nexus pool
+  - e2e-nexus-state: View Nexus pools and allocations
+  - e2e-bng-logs:    View BNG logs for DHCP/Nexus activity
 
 Verification:
   Click 'verify-demo-X' buttons in Tilt UI to test each demo

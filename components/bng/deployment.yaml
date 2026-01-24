@@ -1,11 +1,30 @@
-apiVersion: apps/v1
-kind: Deployment
+apiVersion: v1
+kind: Service
 metadata:
   name: bng
   labels:
     app: bng
 spec:
-  replicas: 1
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+    - name: metrics
+      port: 9090
+      targetPort: 9090
+  clusterIP: None  # Headless for StatefulSet
+  selector:
+    app: bng
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: bng
+  labels:
+    app: bng
+spec:
+  serviceName: bng
+  replicas: 2
   selector:
     matchLabels:
       app: bng
@@ -14,16 +33,28 @@ spec:
       labels:
         app: bng
     spec:
-      # BNG needs host network for DHCP and eBPF
-      hostNetwork: true
+      # BNG needs host network for DHCP and eBPF in production
+      # For demo, we use regular networking
       containers:
         - name: bng
           image: ghcr.io/codelaboratoryltd/bng:latest
           args:
             - demo
-            - --subscribers=10
-            - --duration=0  # Run forever
+            - --subscribers=50
+            - --duration=24h
             - --api-port=8080
+            # Connect to Nexus for IP allocation
+            # Uses in-memory allocator if not set
+            - --nexus-url=http://nexus.default.svc:9000
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: BNG_NODE_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
           ports:
             - name: http
               containerPort: 8080
@@ -38,6 +69,18 @@ spec:
             limits:
               cpu: 1000m
               memory: 512Mi
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 5
           # For production with eBPF:
           # securityContext:
           #   capabilities:

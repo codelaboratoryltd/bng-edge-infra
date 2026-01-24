@@ -1,0 +1,264 @@
+# End-to-End Integration Test
+# Demonstrates: Real DHCP → BNG → Nexus → Hashring Allocation
+#
+# Architecture:
+# ┌─────────────────────────────────────────────────────────────┐
+# │                    demo-e2e namespace                        │
+# │  ┌──────────┐       ┌──────────────────────────────────┐   │
+# │  │  Nexus   │◄─────►│        Pod: bng-e2e               │   │
+# │  │  Server  │ HTTP  │  ┌────────┐     ┌────────────┐   │   │
+# │  │          │       │  │ Client │◄───►│    BNG     │   │   │
+# │  │ Pool:    │       │  │(udhcpc)│veth │--nexus-url │   │   │
+# │  │ 10.200.  │       │  └────────┘     └────────────┘   │   │
+# │  │ 0.0/16   │       └──────────────────────────────────┘   │
+# │  └──────────┘                                               │
+# └─────────────────────────────────────────────────────────────┘
+#
+# Flow:
+# 1. Client sends DHCP DISCOVER
+# 2. BNG receives (eBPF slow path - cache miss)
+# 3. BNG calls Nexus: POST /api/v1/allocations
+# 4. Nexus allocates via hashring, returns IP
+# 5. BNG sends DHCP OFFER with allocated IP
+# 6. Client sends REQUEST, BNG sends ACK
+# 7. Verify: Client IP matches Nexus allocation
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: demo-e2e
+---
+# Nexus Server - Central IP allocation via hashring
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nexus
+  namespace: demo-e2e
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nexus
+  template:
+    metadata:
+      labels:
+        app: nexus
+    spec:
+      containers:
+        - name: nexus
+          image: k3d-bng-edge-registry:5000/ghcr.io_codelaboratoryltd_nexus:tilt-3bf6cfaba6a05953
+          args:
+            - "serve"
+            - "--http-port=9000"
+          ports:
+            - containerPort: 9000
+              name: api
+          readinessProbe:
+            httpGet:
+              path: /api/v1/pools
+              port: 9000
+            initialDelaySeconds: 2
+            periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nexus
+  namespace: demo-e2e
+spec:
+  selector:
+    app: nexus
+  ports:
+    - port: 9000
+      targetPort: 9000
+      name: api
+---
+# ConfigMap with test verification scripts
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: e2e-scripts
+  namespace: demo-e2e
+data:
+  setup-pool.sh: |
+    #!/bin/sh
+    # Create pool in Nexus before BNG starts
+    set -e
+
+    NEXUS_URL="${NEXUS_URL:-http://nexus:9000}"
+    POOL_ID="${POOL_ID:-e2e-pool}"
+    POOL_CIDR="${POOL_CIDR:-10.200.0.0/16}"
+
+    echo "Waiting for Nexus to be ready..."
+    until wget -q -O- "$NEXUS_URL/api/v1/health" > /dev/null 2>&1; do
+      sleep 1
+    done
+
+    echo "Creating pool $POOL_ID ($POOL_CIDR) in Nexus..."
+    wget -q -O- --post-data="{\"id\":\"$POOL_ID\",\"cidr\":\"$POOL_CIDR\",\"prefix\":32}" \
+      --header="Content-Type: application/json" \
+      "$NEXUS_URL/api/v1/pools" || echo "Pool may already exist"
+
+    echo "Pool configuration:"
+    wget -q -O- "$NEXUS_URL/api/v1/pools" | head -100
+
+  verify-e2e.sh: |
+    #!/bin/sh
+    # Verify end-to-end DHCP flow through Nexus
+    set -e
+
+    NEXUS_URL="${NEXUS_URL:-http://nexus:9000}"
+
+    echo "=== E2E Verification ==="
+    echo ""
+
+    # Step 1: Check Nexus pool
+    echo "1. Nexus Pool Status:"
+    wget -q -O- "$NEXUS_URL/api/v1/pools" 2>/dev/null || echo "   Failed to get pools"
+    echo ""
+
+    # Step 2: Check Nexus allocations
+    echo "2. Nexus Allocations:"
+    wget -q -O- "$NEXUS_URL/api/v1/allocations" 2>/dev/null || echo "   No allocations yet"
+    echo ""
+
+    # Step 3: Check client IP
+    echo "3. Client Interface:"
+    ip addr show veth-client 2>/dev/null | grep inet || echo "   No IP assigned"
+    echo ""
+
+    # Step 4: Verify IP is from Nexus pool (10.200.x.x)
+    CLIENT_IP=$(ip addr show veth-client 2>/dev/null | grep "inet " | awk '{print $2}' | cut -d/ -f1)
+    if [ -n "$CLIENT_IP" ]; then
+      case "$CLIENT_IP" in
+        10.200.*)
+          echo "4. Verification: PASS - Client IP $CLIENT_IP is from Nexus pool"
+          ;;
+        *)
+          echo "4. Verification: FAIL - Client IP $CLIENT_IP is NOT from Nexus pool (expected 10.200.x.x)"
+          ;;
+      esac
+    else
+      echo "4. Verification: PENDING - No IP assigned yet"
+    fi
+
+  udhcpc-script.sh: |
+    #!/bin/sh
+    # udhcpc callback script
+    case "$1" in
+      bound|renew)
+        ip addr flush dev $interface 2>/dev/null
+        ip addr add $ip/$mask dev $interface
+        echo "DHCP: Got IP $ip/$mask on $interface"
+        if [ -n "$router" ]; then
+          ip route add default via $router dev $interface 2>/dev/null || true
+        fi
+        ;;
+    esac
+---
+# BNG + Client Pod with shared network namespace
+apiVersion: v1
+kind: Pod
+metadata:
+  name: bng-e2e
+  namespace: demo-e2e
+  labels:
+    app: bng-e2e
+spec:
+  shareProcessNamespace: true
+
+  initContainers:
+    # Wait for Nexus and create pool
+    - name: setup-nexus
+      image: curlimages/curl:latest
+      command: ["/bin/sh", "-c"]
+      args:
+        - |
+          echo "Waiting for Nexus..."
+          until curl -sf "http://nexus:9000/api/v1/pools" > /dev/null 2>&1; do
+            echo "  Nexus not ready, waiting..."
+            sleep 2
+          done
+          echo "Nexus is ready!"
+
+          echo "Creating e2e-pool (10.200.0.0/16)..."
+          curl -sf -X POST "http://nexus:9000/api/v1/pools" \
+            -H "Content-Type: application/json" \
+            -d '{"id":"e2e-pool","cidr":"10.200.0.0/16","prefix":32}' 2>&1 || echo "Pool may already exist"
+
+          echo "Verifying pool:"
+          curl -sf "http://nexus:9000/api/v1/pools"
+
+    # Setup L2 network
+    - name: network-setup
+      image: nicolaka/netshoot:latest
+      command: ["/bin/sh", "-c"]
+      args:
+        - |
+          # Create veth pair for L2 connectivity
+          ip link add veth-bng type veth peer name veth-client
+          ip addr add 10.200.0.1/16 dev veth-bng
+          ip link set veth-bng up
+          ip link set veth-client up
+
+          echo "L2 network ready:"
+          echo "  veth-bng:    10.200.0.1/16 (BNG DHCP server)"
+          echo "  veth-client: (will get IP via DHCP from Nexus pool)"
+      securityContext:
+        privileged: true
+        capabilities:
+          add: ["NET_ADMIN", "NET_RAW"]
+
+  containers:
+    # BNG with Nexus integration
+    - name: bng
+      image: k3d-bng-edge-registry:5000/ghcr.io_codelaboratoryltd_bng:tilt-0fb973315f4309b3
+      args:
+        - "run"
+        - "--interface=veth-bng"
+        - "--nexus-url=http://nexus:9000"
+        - "--nexus-pool=e2e-pool"
+        - "--pool-network=10.200.0.0/16"
+        - "--pool-gateway=10.200.0.1"
+        - "--pool-dns=8.8.8.8"
+        - "--lease-time=1h"
+        - "--log-level=debug"
+      securityContext:
+        privileged: true
+        capabilities:
+          add: ["NET_ADMIN", "NET_RAW", "SYS_ADMIN"]
+      env:
+        - name: NEXUS_URL
+          value: "http://nexus:9000"
+
+    # Test client
+    - name: client
+      image: alpine:3.19
+      command: ["sleep", "infinity"]
+      securityContext:
+        privileged: true
+        capabilities:
+          add: ["NET_ADMIN", "NET_RAW"]
+      volumeMounts:
+        - name: scripts
+          mountPath: /scripts
+          readOnly: true
+
+  volumes:
+    - name: scripts
+      configMap:
+        name: e2e-scripts
+        defaultMode: 0755
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: bng-e2e
+  namespace: demo-e2e
+spec:
+  selector:
+    app: bng-e2e
+  ports:
+    - port: 9090
+      targetPort: 9090
+      name: metrics

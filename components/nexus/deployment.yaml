@@ -1,11 +1,33 @@
-apiVersion: apps/v1
-kind: Deployment
+apiVersion: v1
+kind: Service
 metadata:
   name: nexus
   labels:
     app: nexus
 spec:
-  replicas: 1
+  ports:
+    - name: http
+      port: 9000
+      targetPort: 9000
+    - name: metrics
+      port: 9002
+      targetPort: 9002
+    - name: p2p
+      port: 33123
+      targetPort: 33123
+  clusterIP: None  # Headless for StatefulSet
+  selector:
+    app: nexus
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: nexus
+  labels:
+    app: nexus
+spec:
+  serviceName: nexus
+  replicas: 3
   selector:
     matchLabels:
       app: nexus
@@ -17,16 +39,35 @@ spec:
       containers:
         - name: nexus
           image: ghcr.io/codelaboratoryltd/nexus:latest
+          args:
+            - serve
+            - --http-port=9000
+            - --metrics-port=9002
+            - --p2p-port=33123
+            - --p2p=true
+            - --role=core
+            - --data-path=/data
           ports:
             - name: http
               containerPort: 9000
               protocol: TCP
-            - name: grpc
-              containerPort: 9001
+            - name: metrics
+              containerPort: 9002
+              protocol: TCP
+            - name: p2p
+              containerPort: 33123
               protocol: TCP
           env:
-            - name: NEXUS_STORE_TYPE
-              value: memory  # Use etcd in production
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            # Discovery mode: bootstrap, mdns, dht
+            # - bootstrap: static peers only (requires full multiaddr with peer ID)
+            # - mdns: local network discovery (best for k3d/docker-compose)
+            # - dht: bootstrap peers + Kademlia DHT (default, Neelix-style)
+            - name: NEXUS_DISCOVERY
+              value: "dht"
           resources:
             requests:
               cpu: 100m
@@ -38,7 +79,7 @@ spec:
             httpGet:
               path: /health
               port: 9000
-            initialDelaySeconds: 5
+            initialDelaySeconds: 10
             periodSeconds: 10
           readinessProbe:
             httpGet:
@@ -46,3 +87,14 @@ spec:
               port: 9000
             initialDelaySeconds: 5
             periodSeconds: 5
+          volumeMounts:
+            - name: data
+              mountPath: /data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 1Gi

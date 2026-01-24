@@ -1,0 +1,135 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: bngblaster-config
+  labels:
+    app: bngblaster
+data:
+  ipoe.json: |
+    {
+      "interfaces": {
+        "network": {
+          "interface": "eth0",
+          "address": "10.0.0.1/24"
+        },
+        "access": {
+          "interface": "eth1",
+          "outer-vlan": 100
+        }
+      },
+      "sessions": {
+        "count": 100,
+        "session-time": 0
+      },
+      "dhcp": {
+        "enable": true
+      },
+      "access-line": {
+        "agent-remote-id": "blaster-test"
+      }
+    }
+
+  pppoe.json: |
+    {
+      "interfaces": {
+        "network": {
+          "interface": "eth0"
+        },
+        "access": {
+          "interface": "eth1",
+          "outer-vlan": 100
+        }
+      },
+      "sessions": {
+        "count": 100
+      },
+      "pppoe": {
+        "service-name": "test"
+      },
+      "authentication": {
+        "username": "test@isp",
+        "password": "test"
+      }
+    }
+
+  dhcp-stress.json: |
+    {
+      "interfaces": {
+        "access": {
+          "interface": "eth1",
+          "outer-vlan": 100
+        }
+      },
+      "sessions": {
+        "count": 1000,
+        "start-rate": 100,
+        "stop-rate": 100
+      },
+      "dhcp": {
+        "enable": true,
+        "broadcast": true
+      },
+      "access-line": {
+        "agent-remote-id": "dhcp-stress-test"
+      }
+    }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: bngblaster
+  labels:
+    app: bngblaster
+spec:
+  ports:
+    - name: http
+      port: 8001
+      targetPort: 8001
+  selector:
+    app: bngblaster
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bngblaster
+  labels:
+    app: bngblaster
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: bngblaster
+  template:
+    metadata:
+      labels:
+        app: bngblaster
+    spec:
+      containers:
+        - name: bngblaster
+          image: ghcr.io/codelaboratoryltd/bngblaster:latest
+          # Keep container running for interactive testing
+          command: ["sleep", "infinity"]
+          securityContext:
+            capabilities:
+              add:
+                - NET_ADMIN
+                - NET_RAW
+          ports:
+            - name: http
+              containerPort: 8001
+              protocol: TCP
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 2000m
+              memory: 1Gi
+          volumeMounts:
+            - name: config
+              mountPath: /etc/bngblaster
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: bngblaster-config
