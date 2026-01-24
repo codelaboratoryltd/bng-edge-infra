@@ -171,6 +171,10 @@ metadata:
   namespace: demo-e2e
   labels:
     app: bng-e2e
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "9090"
+    prometheus.io/path: "/metrics"
 spec:
   shareProcessNamespace: true
 

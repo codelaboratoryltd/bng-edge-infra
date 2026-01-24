@@ -32,6 +32,10 @@ spec:
     metadata:
       labels:
         app: bng
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        prometheus.io/path: "/metrics"
     spec:
       # BNG needs host network for DHCP and eBPF in production
       # For demo, we use regular networking
