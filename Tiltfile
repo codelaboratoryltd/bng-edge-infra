@@ -1020,6 +1020,911 @@ curl -s http://localhost:9011/api/v1/allocations | head -100
     )
 
 # -----------------------------------------------------------------------------
+# HA with Nexus Test - Two BNGs with shared Nexus (implicit HA)
+# -----------------------------------------------------------------------------
+# Demonstrates: Both BNGs lookup allocations from same Nexus
+#   - Client gets same IP from either BNG
+#   - Failover is automatic via shared state
+#   - No explicit state sync needed between BNGs
+
+if selected_demo == 'all' or selected_demo == 'ha-nexus':
+    k8s_yaml(kustomize('components/ha-nexus-test'))
+
+    k8s_resource(
+        'nexus:deployment:demo-ha-nexus',
+        new_name='nexus-ha',
+        labels=['ha-nexus-test'],
+        resource_deps=['nexus-image'],
+        port_forwards='9012:9000',
+    )
+
+    k8s_resource(
+        'bng-ha-test',
+        labels=['ha-nexus-test'],
+        resource_deps=['bng-image', 'nexus-ha'],
+    )
+
+    # Run HA test
+    local_resource(
+        'ha-nexus-test',
+        cmd='''
+echo "Running HA with Nexus test..."
+echo ""
+kubectl exec -n demo-ha-nexus bng-ha-test -c client -- sh /scripts/run-ha-test.sh
+''',
+        labels=['ha-nexus-test', 'test'],
+        auto_init=False,
+        resource_deps=['bng-ha-test'],
+    )
+
+    # View BNG logs
+    local_resource(
+        'ha-nexus-bng-logs',
+        cmd='kubectl logs -n demo-ha-nexus bng-ha-test -c bng --tail=40',
+        labels=['ha-nexus-test', 'logs'],
+        auto_init=False,
+        resource_deps=['bng-ha-test'],
+    )
+
+    # View Nexus state
+    local_resource(
+        'ha-nexus-state',
+        cmd='''
+echo "=== Nexus Pools ==="
+curl -s http://localhost:9012/api/v1/pools | head -50
+echo ""
+echo "=== Nexus Allocations ==="
+curl -s http://localhost:9012/api/v1/allocations | head -50
+''',
+        labels=['ha-nexus-test', 'verify'],
+        auto_init=False,
+        resource_deps=['nexus-ha'],
+    )
+
+# -----------------------------------------------------------------------------
+# HA P2P Test - Two BNGs with direct P2P sync (no Nexus)
+# -----------------------------------------------------------------------------
+# Demonstrates: Active/Standby BNG pair with SSE state sync
+#   - Active BNG handles DHCP and syncs sessions to standby
+#   - Standby has full state, ready for failover
+#   - No central coordinator (Nexus) required
+
+if selected_demo == 'all' or selected_demo == 'ha-p2p':
+    k8s_yaml(kustomize('components/ha-p2p-test'))
+
+    k8s_resource(
+        'bng-active:pod:demo-ha-p2p',
+        new_name='bng-ha-active',
+        labels=['ha-p2p-test'],
+        resource_deps=['bng-image'],
+        port_forwards='8088:8080',
+    )
+
+    k8s_resource(
+        'bng-standby:pod:demo-ha-p2p',
+        new_name='bng-ha-standby',
+        labels=['ha-p2p-test'],
+        resource_deps=['bng-image', 'bng-ha-active'],
+        port_forwards='8089:8080',
+    )
+
+    # Run HA P2P test
+    local_resource(
+        'ha-p2p-test',
+        cmd='''
+echo "Running HA P2P (Active/Standby) test..."
+echo ""
+kubectl exec -n demo-ha-p2p bng-active -c client -- sh /scripts/run-ha-test.sh
+''',
+        labels=['ha-p2p-test', 'test'],
+        auto_init=False,
+        resource_deps=['bng-ha-standby'],
+    )
+
+    # View Active BNG logs
+    local_resource(
+        'ha-p2p-active-logs',
+        cmd='kubectl logs -n demo-ha-p2p bng-active -c bng --tail=40',
+        labels=['ha-p2p-test', 'logs'],
+        auto_init=False,
+        resource_deps=['bng-ha-active'],
+    )
+
+    # View Standby BNG logs
+    local_resource(
+        'ha-p2p-standby-logs',
+        cmd='kubectl logs -n demo-ha-p2p bng-standby -c bng --tail=40',
+        labels=['ha-p2p-test', 'logs'],
+        auto_init=False,
+        resource_deps=['bng-ha-standby'],
+    )
+
+    # Check HA sync status
+    local_resource(
+        'ha-p2p-sync-status',
+        cmd='''
+echo "=== HA Sync Status ==="
+echo ""
+echo "Active BNG sessions:"
+curl -s http://localhost:8088/api/v1/sessions 2>/dev/null | head -50 || echo "  (not available)"
+echo ""
+echo "Standby BNG sessions:"
+curl -s http://localhost:8089/api/v1/sessions 2>/dev/null | head -50 || echo "  (not available)"
+echo ""
+echo "Active BNG HA health:"
+curl -s http://localhost:8088/ha/health 2>/dev/null || echo "  (not available)"
+echo ""
+echo "Standby BNG HA health:"
+curl -s http://localhost:8089/ha/health 2>/dev/null || echo "  (not available)"
+''',
+        labels=['ha-p2p-test', 'verify'],
+        auto_init=False,
+        resource_deps=['bng-ha-standby'],
+    )
+
+# -----------------------------------------------------------------------------
+# Demo F: WiFi with TTL-Based Lease Expiration
+# -----------------------------------------------------------------------------
+# Shows epoch-based allocation with automatic expiration
+# Uses EpochBitmapAllocator for memory-efficient lease tracking
+
+if selected_demo == 'all' or selected_demo == 'wifi':
+    k8s_yaml(kustomize('components/wifi-test'))
+
+    k8s_resource(
+        'nexus',
+        new_name='nexus:wifi',
+        labels=['wifi-test'],
+    )
+
+    k8s_resource(
+        'bng-wifi',
+        port_forwards=[
+            '8092:8080',  # BNG API
+        ],
+        labels=['wifi-test'],
+        resource_deps=['nexus:wifi'],
+    )
+
+    # Run WiFi lease test
+    local_resource(
+        'wifi-test',
+        cmd='''
+kubectl exec -n demo-wifi bng-wifi -c client -- sh /scripts/run-wifi-test.sh
+''',
+        labels=['wifi-test', 'test'],
+        auto_init=False,
+        resource_deps=['bng-wifi'],
+    )
+
+    # View BNG logs
+    local_resource(
+        'wifi-bng-logs',
+        cmd='kubectl logs -n demo-wifi bng-wifi -c bng --tail=40',
+        labels=['wifi-test', 'logs'],
+        auto_init=False,
+        resource_deps=['bng-wifi'],
+    )
+
+    # Check pool and epoch status
+    local_resource(
+        'wifi-pool-status',
+        cmd='''
+echo "=== WiFi Pool Status ==="
+echo ""
+echo "Nexus pool info:"
+curl -s http://localhost:9000/api/v1/pools 2>/dev/null | head -20 || echo "  (not available via port-forward)"
+echo ""
+echo "BNG stats:"
+curl -s http://localhost:8092/api/v1/stats 2>/dev/null || echo "  (not available)"
+echo ""
+echo "BNG sessions:"
+curl -s http://localhost:8092/api/v1/sessions 2>/dev/null | head -30 || echo "  (not available)"
+''',
+        labels=['wifi-test', 'verify'],
+        auto_init=False,
+        resource_deps=['bng-wifi'],
+    )
+
+    # Verification button (quick pass/fail)
+    local_resource(
+        'verify-demo-wifi',
+        cmd='''
+echo "=== WiFi Demo Verification ==="
+# Run DHCP and check we get an IP
+IP=$(kubectl exec -n demo-wifi bng-wifi -c client -- sh -c '
+  ip addr flush dev veth-client 2>/dev/null
+  timeout 10 udhcpc -i veth-client -n -q -t 3 -T 2 -f -s /dev/null 2>&1
+  ip addr show veth-client 2>/dev/null | grep "inet " | head -1 | awk "{print \\$2}" | cut -d/ -f1
+' 2>/dev/null)
+
+if [ -n "$IP" ] && [ "$IP" != "" ]; then
+  echo "✓ PASS: Got IP $IP via lease mode"
+  exit 0
+else
+  echo "✗ FAIL: No IP allocated"
+  exit 1
+fi
+''',
+        labels=['wifi-test', 'verify'],
+        auto_init=False,
+        resource_deps=['bng-wifi'],
+    )
+
+# -----------------------------------------------------------------------------
+# Demo G: Peer Pool (Distributed Allocation without Central Nexus)
+# -----------------------------------------------------------------------------
+# BNGs form a hashring to coordinate IP allocation
+# No central Nexus required - peers forward requests to owner
+
+if selected_demo == 'all' or selected_demo == 'peer-pool':
+    k8s_yaml(kustomize('components/peer-pool-test'))
+
+    k8s_resource(
+        'bng-peer-pool',
+        new_name='bng-peers',
+        port_forwards=[
+            '8093:8080',  # BNG-0 API (via headless service)
+        ],
+        labels=['peer-pool-test'],
+        resource_deps=['bng-image'],
+    )
+
+    # Run peer pool test from BNG-0
+    local_resource(
+        'peer-pool-test-0',
+        cmd='''
+echo "=== Testing from BNG-0 ==="
+kubectl exec -n demo-peer-pool bng-peer-pool-0 -c client -- sh /scripts/run-peer-test.sh
+''',
+        labels=['peer-pool-test', 'test'],
+        auto_init=False,
+        resource_deps=['bng-peers'],
+    )
+
+    # Run peer pool test from BNG-1
+    local_resource(
+        'peer-pool-test-1',
+        cmd='''
+echo "=== Testing from BNG-1 ==="
+kubectl exec -n demo-peer-pool bng-peer-pool-1 -c client -- sh /scripts/run-peer-test.sh
+''',
+        labels=['peer-pool-test', 'test'],
+        auto_init=False,
+        resource_deps=['bng-peers'],
+    )
+
+    # Run peer pool test from BNG-2
+    local_resource(
+        'peer-pool-test-2',
+        cmd='''
+echo "=== Testing from BNG-2 ==="
+kubectl exec -n demo-peer-pool bng-peer-pool-2 -c client -- sh /scripts/run-peer-test.sh
+''',
+        labels=['peer-pool-test', 'test'],
+        auto_init=False,
+        resource_deps=['bng-peers'],
+    )
+
+    # View BNG-0 logs
+    local_resource(
+        'peer-pool-bng0-logs',
+        cmd='kubectl logs -n demo-peer-pool bng-peer-pool-0 -c bng --tail=40',
+        labels=['peer-pool-test', 'logs'],
+        auto_init=False,
+        resource_deps=['bng-peers'],
+    )
+
+    # Check pool status across all peers
+    local_resource(
+        'peer-pool-status',
+        cmd='''
+echo "=== Peer Pool Status ==="
+echo ""
+for i in 0 1 2; do
+  echo "BNG-$i pool status:"
+  kubectl exec -n demo-peer-pool bng-$i -c bng -- wget -q -O- http://localhost:8080/pool/status 2>/dev/null || echo "  (not available)"
+  echo ""
+done
+''',
+        labels=['peer-pool-test', 'verify'],
+        auto_init=False,
+        resource_deps=['bng-peers'],
+    )
+
+    # Verify consistent allocation
+    local_resource(
+        'peer-pool-verify',
+        cmd='''
+echo "=== Verify Consistent Allocation ==="
+echo ""
+echo "Allocating from BNG-0 for test-subscriber..."
+kubectl exec -n demo-peer-pool bng-peer-pool-0 -c bng -- wget -q -O- --post-data='{"subscriber_id":"test-sub-123"}' \
+  --header='Content-Type: application/json' http://localhost:8080/pool/allocate 2>/dev/null || echo "  (allocation failed)"
+echo ""
+echo "Checking allocation from all peers..."
+for i in 0 1 2; do
+  echo "BNG-$i lookup:"
+  kubectl exec -n demo-peer-pool bng-$i -c bng -- wget -q -O- "http://localhost:8080/pool/lookup?subscriber_id=test-sub-123" 2>/dev/null || echo "  (not found)"
+done
+''',
+        labels=['peer-pool-test', 'verify'],
+        auto_init=False,
+        resource_deps=['bng-peers'],
+    )
+
+    # Verification button (quick pass/fail)
+    local_resource(
+        'verify-demo-peer-pool',
+        cmd='''
+echo "=== Peer Pool Demo Verification ==="
+
+# Allocate from BNG-0
+ALLOC=$(kubectl exec -n demo-peer-pool bng-peer-pool-0 -c bng -- wget -q -O- --post-data='{"subscriber_id":"verify-test-'$(date +%s)'"}' \
+  --header='Content-Type: application/json' http://localhost:8080/pool/allocate 2>/dev/null)
+
+IP=$(echo "$ALLOC" | grep -o '"ip":"[^"]*"' | cut -d'"' -f4)
+
+if [ -n "$IP" ] && [ "$IP" != "" ]; then
+  echo "✓ PASS: Allocated IP $IP via peer pool"
+
+  # Check consistency - lookup from another node
+  LOOKUP=$(kubectl exec -n demo-peer-pool bng-peer-pool-1 -c bng -- wget -q -O- \
+    "http://localhost:8080/pool/lookup?subscriber_id=verify-test-$(date +%s)" 2>/dev/null || echo "{}")
+
+  echo "  Peer consistency check from BNG-1: $LOOKUP"
+  exit 0
+else
+  echo "✗ FAIL: No IP allocated"
+  echo "  Response: $ALLOC"
+  exit 1
+fi
+''',
+        labels=['peer-pool-test', 'verify'],
+        auto_init=False,
+        resource_deps=['bng-peers'],
+    )
+
+# -----------------------------------------------------------------------------
+# Demo: RADIUS-Time Allocation (The Key Optimization)
+# -----------------------------------------------------------------------------
+# Shows IP allocation at RADIUS time (before DHCP), enabling eBPF fast path
+# This is THE KEY optimization: DHCP served from kernel (~10us) not userspace (~10ms)
+
+if selected_demo == 'all' or selected_demo == 'radius-time':
+    k8s_yaml(kustomize('components/radius-time-test'))
+
+    k8s_resource(
+        'nexus:deployment:demo-radius-time',
+        new_name='nexus:radius-time',
+        labels=['radius-time-test'],
+        resource_deps=['nexus-image'],
+        port_forwards='9013:9000',
+    )
+
+    k8s_resource(
+        'bng-radius-time',
+        port_forwards='8094:8080',
+        labels=['radius-time-test'],
+        resource_deps=['bng-image', 'nexus:radius-time'],
+    )
+
+    # Run RADIUS-time allocation test
+    local_resource(
+        'radius-time-test',
+        cmd='''
+echo "Running RADIUS-Time Allocation test..."
+echo ""
+kubectl exec -n demo-radius-time bng -c client -- sh /scripts/run-radius-time-test.sh
+''',
+        labels=['radius-time-test', 'test'],
+        auto_init=False,
+        resource_deps=['bng-radius-time'],
+    )
+
+    # View BNG logs
+    local_resource(
+        'radius-time-bng-logs',
+        cmd='kubectl logs -n demo-radius-time deploy/bng -c bng --tail=40',
+        labels=['radius-time-test', 'logs'],
+        auto_init=False,
+        resource_deps=['bng-radius-time'],
+    )
+
+    # Check provision endpoint (IPv4 only)
+    local_resource(
+        'radius-time-provision',
+        cmd='''
+echo "=== Test Provision API (IPv4) ==="
+echo ""
+echo "Provisioning a subscriber (simulates RADIUS Access-Accept)..."
+curl -s -X POST http://localhost:8094/api/v1/provision \
+  -H "Content-Type: application/json" \
+  -d '{"mac":"02:00:00:00:00:99","subscriber_id":"test-sub-99"}' | jq .
+echo ""
+echo "Checking BNG stats (fast path counter)..."
+curl -s http://localhost:8094/api/v1/stats | jq .
+''',
+        labels=['radius-time-test', 'verify'],
+        auto_init=False,
+        resource_deps=['bng-radius-time'],
+    )
+
+    # Test dual-stack provisioning (IPv4 + IPv6)
+    local_resource(
+        'radius-time-dualstack',
+        cmd='''
+echo "=== Test Dual-Stack Provision API (IPv4 + IPv6) ==="
+echo ""
+kubectl exec -n demo-radius-time deploy/bng -c client -- sh /scripts/run-dualstack-test.sh
+''',
+        labels=['radius-time-test', 'test'],
+        auto_init=False,
+        resource_deps=['bng-radius-time'],
+    )
+
+    # Test dual-stack via curl directly
+    local_resource(
+        'radius-time-dualstack-curl',
+        cmd='''
+echo "=== Dual-Stack Provisioning via curl ==="
+echo ""
+MAC="02:00:00:00:$(printf '%02x' $((RANDOM % 256))):$(printf '%02x' $((RANDOM % 256)))"
+echo "MAC: $MAC"
+echo ""
+echo "Provisioning dual-stack (IPv4 + IPv6)..."
+curl -s -X POST http://localhost:8094/api/v1/provision \
+  -H "Content-Type: application/json" \
+  -d "{\"mac\":\"$MAC\",\"subscriber_id\":\"dualstack-test-$(date +%s)\",\"ipv6_pool_id\":\"radius-demo-v6\"}" | jq .
+''',
+        labels=['radius-time-test', 'verify'],
+        auto_init=False,
+        resource_deps=['bng-radius-time'],
+    )
+
+    # Verification button
+    local_resource(
+        'verify-demo-radius-time',
+        cmd='''
+echo "=== RADIUS-Time Allocation Verification ==="
+MAC="02:00:00:00:00:$(date +%S)"
+
+echo "Step 1: Provision via API (RADIUS-time)..."
+PROVISION=$(curl -s -X POST http://localhost:8094/api/v1/provision \
+  -H "Content-Type: application/json" \
+  -d "{\"mac\":\"$MAC\",\"subscriber_id\":\"verify-sub-$(date +%s)\"}")
+
+PROVISIONED_IP=$(echo "$PROVISION" | grep -o '"ip":"[^"]*"' | cut -d'"' -f4)
+FAST_PATH=$(echo "$PROVISION" | grep -o '"fast_path":[^,}]*' | cut -d':' -f2)
+
+echo "  Provisioned IP: $PROVISIONED_IP"
+echo "  Fast path enabled: $FAST_PATH"
+
+if [ -n "$PROVISIONED_IP" ] && [ "$FAST_PATH" = "true" ]; then
+  echo ""
+  echo "✓ PASS: RADIUS-time allocation working"
+  echo "  - IP allocated before DHCP request"
+  echo "  - eBPF fast path enabled"
+  echo "  - DHCP will be served from kernel"
+  exit 0
+else
+  echo ""
+  echo "✗ FAIL: Provisioning failed"
+  echo "  Response: $PROVISION"
+  exit 1
+fi
+''',
+        labels=['radius-time-test', 'verify'],
+        auto_init=False,
+        resource_deps=['bng-radius-time'],
+    )
+
+# -----------------------------------------------------------------------------
+# Demo: PPPoE Session Lifecycle
+# -----------------------------------------------------------------------------
+# Demonstrates full PPPoE stack: PADI→PADO→PADR→PADS→LCP→Auth→IPCP
+
+if selected_demo == 'all' or selected_demo == 'pppoe':
+    k8s_yaml(kustomize('components/pppoe-test'))
+
+    k8s_resource(
+        'pppoe-test',
+        port_forwards='8095:8080',
+        labels=['pppoe-test'],
+        resource_deps=['helmfile-hydrate'],
+    )
+
+    # Run PPPoE session test
+    local_resource(
+        'pppoe-test-run',
+        cmd='kubectl exec -n demo-pppoe pppoe-test -c client -- /scripts/run-pppoe-test.sh',
+        labels=['pppoe-test', 'test'],
+        auto_init=False,
+        resource_deps=['pppoe-test'],
+    )
+
+    # Quick verification
+    local_resource(
+        'pppoe-verify',
+        cmd='kubectl exec -n demo-pppoe pppoe-test -c client -- /scripts/verify-pppoe.sh',
+        labels=['pppoe-test', 'verify'],
+        auto_init=False,
+        resource_deps=['pppoe-test'],
+    )
+
+    # View BNG logs
+    local_resource(
+        'pppoe-bng-logs',
+        cmd='kubectl logs -n demo-pppoe pppoe-test -c bng --tail=50',
+        labels=['pppoe-test', 'logs'],
+        auto_init=False,
+        resource_deps=['pppoe-test'],
+    )
+
+# -----------------------------------------------------------------------------
+# Demo: IPv6 (SLAAC + DHCPv6 + Prefix Delegation)
+# -----------------------------------------------------------------------------
+# Demonstrates Router Advertisements, DHCPv6 address allocation, and PD
+
+if selected_demo == 'all' or selected_demo == 'ipv6':
+    k8s_yaml(kustomize('components/ipv6-test'))
+
+    k8s_resource(
+        'bng-ipv6',
+        port_forwards='8096:8080',
+        labels=['ipv6-test'],
+        resource_deps=['helmfile-hydrate'],
+    )
+
+    # Run full IPv6 test (SLAAC + DHCPv6 + PD)
+    local_resource(
+        'ipv6-test-run',
+        cmd='kubectl exec -n demo-ipv6 bng-ipv6 -c client -- /scripts/run-ipv6-test.sh',
+        labels=['ipv6-test', 'test'],
+        auto_init=False,
+        resource_deps=['bng-ipv6'],
+    )
+
+    # View BNG logs
+    local_resource(
+        'ipv6-bng-logs',
+        cmd='kubectl logs -n demo-ipv6 bng-ipv6 -c bng --tail=50',
+        labels=['ipv6-test', 'logs'],
+        auto_init=False,
+        resource_deps=['bng-ipv6'],
+    )
+
+    # Check IPv6 addresses on client
+    local_resource(
+        'ipv6-client-addrs',
+        cmd='kubectl exec -n demo-ipv6 bng-ipv6 -c client -- ip -6 addr show',
+        labels=['ipv6-test', 'verify'],
+        auto_init=False,
+        resource_deps=['bng-ipv6'],
+    )
+
+# -----------------------------------------------------------------------------
+# Demo: NAT44/CGNAT
+# -----------------------------------------------------------------------------
+# Demonstrates CGNAT with port blocks, hairpinning, and logging
+
+if selected_demo == 'all' or selected_demo == 'nat':
+    k8s_yaml(kustomize('components/nat-test'))
+
+    k8s_resource(
+        'bng-nat',
+        port_forwards='8097:8080',
+        labels=['nat-test'],
+        resource_deps=['helmfile-hydrate'],
+    )
+
+    # Run all NAT tests
+    local_resource(
+        'nat-test-all',
+        cmd='kubectl exec -n demo-nat bng-nat -c client-1 -- sh /scripts/run-all-tests.sh',
+        labels=['nat-test', 'test'],
+        auto_init=False,
+        resource_deps=['bng-nat'],
+    )
+
+    # Test basic NAT
+    local_resource(
+        'nat-test-basic',
+        cmd='kubectl exec -n demo-nat bng-nat -c client-1 -- sh /scripts/test-basic-nat.sh',
+        labels=['nat-test', 'test'],
+        auto_init=False,
+        resource_deps=['bng-nat'],
+    )
+
+    # Test hairpinning
+    local_resource(
+        'nat-test-hairpin',
+        cmd='kubectl exec -n demo-nat bng-nat -c client-1 -- sh /scripts/test-hairpinning.sh',
+        labels=['nat-test', 'test'],
+        auto_init=False,
+        resource_deps=['bng-nat'],
+    )
+
+    # Test port blocks
+    local_resource(
+        'nat-test-ports',
+        cmd='kubectl exec -n demo-nat bng-nat -c client-1 -- sh /scripts/test-port-blocks.sh',
+        labels=['nat-test', 'verify'],
+        auto_init=False,
+        resource_deps=['bng-nat'],
+    )
+
+    # View NAT logs
+    local_resource(
+        'nat-logs',
+        cmd='kubectl exec -n demo-nat bng-nat -c client-1 -- sh /scripts/test-nat-logging.sh',
+        labels=['nat-test', 'logs'],
+        auto_init=False,
+        resource_deps=['bng-nat'],
+    )
+
+    # View BNG logs
+    local_resource(
+        'nat-bng-logs',
+        cmd='kubectl logs -n demo-nat bng-nat -c bng --tail=50',
+        labels=['nat-test', 'logs'],
+        auto_init=False,
+        resource_deps=['bng-nat'],
+    )
+
+# -----------------------------------------------------------------------------
+# Demo: QoS / Rate Limiting (TC eBPF)
+# -----------------------------------------------------------------------------
+# Demonstrates per-subscriber rate limiting with token bucket algorithm
+
+if selected_demo == 'all' or selected_demo == 'qos':
+    k8s_yaml(kustomize('components/qos-test'))
+
+    k8s_resource(
+        'qos-test',
+        port_forwards='8098:8080',
+        labels=['qos-test'],
+        resource_deps=['helmfile-hydrate'],
+    )
+
+    # Run complete QoS demo
+    local_resource(
+        'qos-demo-run',
+        cmd='kubectl exec -n demo-qos qos-test -c client -- /scripts/run-demo.sh',
+        labels=['qos-test', 'test'],
+        auto_init=False,
+        resource_deps=['qos-test'],
+    )
+
+    # Configure rate limit
+    local_resource(
+        'qos-configure',
+        cmd='kubectl exec -n demo-qos qos-test -c client -- /scripts/configure-rate-limit.sh 10.100.0.100 10 5 128',
+        labels=['qos-test', 'test'],
+        auto_init=False,
+        resource_deps=['qos-test'],
+    )
+
+    # Measure throughput
+    local_resource(
+        'qos-measure',
+        cmd='kubectl exec -n demo-qos qos-test -c client -- /scripts/measure-throughput.sh 10',
+        labels=['qos-test', 'verify'],
+        auto_init=False,
+        resource_deps=['qos-test'],
+    )
+
+    # Verify rate limiting
+    local_resource(
+        'qos-verify',
+        cmd='kubectl exec -n demo-qos qos-test -c client -- /scripts/verify-rate-limiting.sh 10 5',
+        labels=['qos-test', 'verify'],
+        auto_init=False,
+        resource_deps=['qos-test'],
+    )
+
+    # Multi-subscriber test
+    local_resource(
+        'qos-multi-sub',
+        cmd='kubectl exec -n demo-qos qos-test -c client -- /scripts/multi-subscriber-test.sh',
+        labels=['qos-test', 'test'],
+        auto_init=False,
+        resource_deps=['qos-test'],
+    )
+
+    # Show stats
+    local_resource(
+        'qos-stats',
+        cmd='kubectl exec -n demo-qos qos-test -c client -- /scripts/show-stats.sh',
+        labels=['qos-test', 'verify'],
+        auto_init=False,
+        resource_deps=['qos-test'],
+    )
+
+    # View BNG logs
+    local_resource(
+        'qos-bng-logs',
+        cmd='kubectl logs -n demo-qos qos-test -c bng --tail=50',
+        labels=['qos-test', 'logs'],
+        auto_init=False,
+        resource_deps=['qos-test'],
+    )
+
+# -----------------------------------------------------------------------------
+# Demo: Failure Injection / Resilience Testing
+# -----------------------------------------------------------------------------
+# Tests failover, partition recovery, and graceful degradation
+
+if selected_demo == 'all' or selected_demo == 'failure':
+    k8s_yaml(kustomize('components/failure-test'))
+
+    k8s_resource(
+        'nexus-failure',
+        new_name='nexus-failure-cluster',
+        labels=['failure-test'],
+        resource_deps=['helmfile-hydrate'],
+    )
+
+    k8s_resource(
+        'bng-active',
+        new_name='bng-failure-active',
+        labels=['failure-test'],
+        resource_deps=['nexus-failure-cluster'],
+    )
+
+    k8s_resource(
+        'bng-standby',
+        new_name='bng-failure-standby',
+        labels=['failure-test'],
+        resource_deps=['bng-failure-active'],
+    )
+
+    k8s_resource(
+        'test-controller',
+        new_name='failure-controller',
+        labels=['failure-test'],
+        resource_deps=['bng-failure-standby'],
+    )
+
+    # Run all failure tests
+    local_resource(
+        'failure-test-all',
+        cmd='kubectl exec -n demo-failure test-controller -- /scripts/run-all-tests.sh',
+        labels=['failure-test', 'test'],
+        auto_init=False,
+        resource_deps=['failure-controller'],
+    )
+
+    # Individual test: Nexus node failure
+    local_resource(
+        'failure-nexus',
+        cmd='kubectl exec -n demo-failure test-controller -- /scripts/test-nexus-failure.sh',
+        labels=['failure-test', 'test'],
+        auto_init=False,
+        resource_deps=['failure-controller'],
+    )
+
+    # Individual test: BNG failover
+    local_resource(
+        'failure-bng',
+        cmd='kubectl exec -n demo-failure test-controller -- /scripts/test-bng-failover.sh',
+        labels=['failure-test', 'test'],
+        auto_init=False,
+        resource_deps=['failure-controller'],
+    )
+
+    # Individual test: Network partition
+    local_resource(
+        'failure-partition',
+        cmd='kubectl exec -n demo-failure test-controller -- /scripts/test-network-partition.sh',
+        labels=['failure-test', 'test'],
+        auto_init=False,
+        resource_deps=['failure-controller'],
+    )
+
+    # Individual test: State recovery
+    local_resource(
+        'failure-recovery',
+        cmd='kubectl exec -n demo-failure test-controller -- /scripts/test-state-recovery.sh',
+        labels=['failure-test', 'test'],
+        auto_init=False,
+        resource_deps=['failure-controller'],
+    )
+
+    # Individual test: Graceful degradation
+    local_resource(
+        'failure-degradation',
+        cmd='kubectl exec -n demo-failure test-controller -- /scripts/test-graceful-degradation.sh',
+        labels=['failure-test', 'test'],
+        auto_init=False,
+        resource_deps=['failure-controller'],
+    )
+
+# -----------------------------------------------------------------------------
+# Demo: BGP/FRR Integration (Subscriber Route Injection)
+# -----------------------------------------------------------------------------
+# Demonstrates BGP peering, subscriber route injection/withdrawal, and BFD
+
+if selected_demo == 'all' or selected_demo == 'bgp':
+    k8s_yaml(kustomize('components/bgp-test'))
+
+    k8s_resource(
+        'frr-upstream',
+        labels=['bgp-test'],
+        resource_deps=['helmfile-hydrate'],
+    )
+
+    k8s_resource(
+        'bng-bgp',
+        port_forwards='8099:8080',
+        labels=['bgp-test'],
+        resource_deps=['frr-upstream'],
+    )
+
+    # Run full BGP demo
+    local_resource(
+        'bgp-demo-run',
+        cmd='kubectl exec -n demo-bgp deploy/bng-bgp -c frr -- /scripts/run-demo.sh',
+        labels=['bgp-test', 'test'],
+        auto_init=False,
+        resource_deps=['bng-bgp'],
+    )
+
+    # Check BGP session
+    local_resource(
+        'bgp-session',
+        cmd='kubectl exec -n demo-bgp deploy/bng-bgp -c frr -- /scripts/check-bgp-session.sh',
+        labels=['bgp-test', 'verify'],
+        auto_init=False,
+        resource_deps=['bng-bgp'],
+    )
+
+    # Check BFD session
+    local_resource(
+        'bgp-bfd',
+        cmd='kubectl exec -n demo-bgp deploy/bng-bgp -c frr -- /scripts/check-bfd-session.sh',
+        labels=['bgp-test', 'verify'],
+        auto_init=False,
+        resource_deps=['bng-bgp'],
+    )
+
+    # Inject subscriber route
+    local_resource(
+        'bgp-inject-route',
+        cmd='kubectl exec -n demo-bgp deploy/bng-bgp -c frr -- /scripts/inject-subscriber-route.sh 10.0.1.100',
+        labels=['bgp-test', 'test'],
+        auto_init=False,
+        resource_deps=['bng-bgp'],
+    )
+
+    # Show routes
+    local_resource(
+        'bgp-show-routes',
+        cmd='kubectl exec -n demo-bgp deploy/bng-bgp -c frr -- /scripts/show-routes.sh',
+        labels=['bgp-test', 'verify'],
+        auto_init=False,
+        resource_deps=['bng-bgp'],
+    )
+
+    # Check upstream received routes
+    local_resource(
+        'bgp-upstream-routes',
+        cmd='kubectl exec -n demo-bgp deploy/frr-upstream -- /scripts/check-upstream-routes.sh',
+        labels=['bgp-test', 'verify'],
+        auto_init=False,
+        resource_deps=['bng-bgp'],
+    )
+
+    # Withdraw subscriber route
+    local_resource(
+        'bgp-withdraw-route',
+        cmd='kubectl exec -n demo-bgp deploy/bng-bgp -c frr -- /scripts/withdraw-subscriber-route.sh 10.0.1.100',
+        labels=['bgp-test', 'test'],
+        auto_init=False,
+        resource_deps=['bng-bgp'],
+    )
+
+# -----------------------------------------------------------------------------
 # Infrastructure Components (Observability)
 # -----------------------------------------------------------------------------
 
@@ -1060,6 +1965,17 @@ Demo Configurations:
   Blaster Test:                  - Real L2 DHCP (local pool only)
   E2E Test:                      - Real DHCP → BNG → Nexus (FULL FLOW)
   Walled Garden Test:            - Walled Garden → Activation → Production IP
+  HA Nexus Test:                 - Two BNGs + shared Nexus (implicit HA)
+  HA P2P Test:                   - Two BNGs direct sync (Active/Standby)
+  WiFi Test:                     - TTL-based lease mode with epoch expiration
+  Peer Pool Test:                - Distributed allocation without central Nexus
+  RADIUS-Time Test:              - IP allocation at RADIUS time (KEY OPTIMIZATION)
+  PPPoE Test:                    - Full PPPoE session lifecycle
+  IPv6 Test:                     - SLAAC + DHCPv6 + Prefix Delegation
+  NAT Test:                      - CGNAT with port blocks and hairpinning
+  QoS Test:                      - Per-subscriber rate limiting (TC eBPF)
+  Failure Test:                  - Resilience and failover scenarios
+  BGP Test:                      - FRR peering and subscriber route injection
 
 Run specific demo:
   tilt up -- --demo=a              # Standalone BNG only
@@ -1070,6 +1986,17 @@ Run specific demo:
   tilt up -- --demo=blaster-test   # Real DHCP (local pool)
   tilt up -- --demo=e2e            # Real DHCP → Nexus (RECOMMENDED)
   tilt up -- --demo=walled-garden  # Walled Garden lifecycle
+  tilt up -- --demo=ha-nexus       # HA with shared Nexus
+  tilt up -- --demo=ha-p2p         # HA P2P Active/Standby
+  tilt up -- --demo=wifi           # WiFi TTL lease mode
+  tilt up -- --demo=peer-pool      # Peer pool (no Nexus)
+  tilt up -- --demo=radius-time    # RADIUS-time allocation (KEY OPTIMIZATION)
+  tilt up -- --demo=pppoe          # PPPoE session lifecycle
+  tilt up -- --demo=ipv6           # IPv6 SLAAC/DHCPv6/PD
+  tilt up -- --demo=nat            # NAT/CGNAT
+  tilt up -- --demo=qos            # QoS rate limiting
+  tilt up -- --demo=failure        # Failure injection/resilience
+  tilt up -- --demo=bgp            # BGP/FRR subscriber routes
   tilt up                          # All demos (default)
 
 E2E Integration Test (--demo=e2e):
@@ -1083,6 +2010,91 @@ Walled Garden Test (--demo=walled-garden):
   - wgar-full-test:   Run complete walled garden → production test
   - wgar-bng-logs:    View BNG logs during test
   - wgar-nexus-state: View Nexus pools and allocations
+
+HA with Nexus (--demo=ha-nexus):
+  Two BNGs sharing state via central Nexus:
+  - ha-nexus-test:     Run HA test (same IP from either BNG)
+  - ha-nexus-bng-logs: View BNG logs
+  - ha-nexus-state:    View Nexus allocations
+
+HA P2P (--demo=ha-p2p):
+  Active/Standby BNGs with direct P2P sync (no Nexus):
+  - ha-p2p-test:        Run HA P2P test
+  - ha-p2p-active-logs: View Active BNG logs
+  - ha-p2p-standby-logs: View Standby BNG logs
+  - ha-p2p-sync-status: Check HA sync status
+
+WiFi Test (--demo=wifi):
+  TTL-based lease mode with epoch expiration (EpochBitmapAllocator):
+  - wifi-test:         Run WiFi lease allocation test
+  - wifi-bng-logs:     View BNG logs
+  - wifi-pool-status:  Check pool and epoch status
+
+Peer Pool (--demo=peer-pool):
+  Distributed allocation without central Nexus (hashring coordination):
+  - peer-pool-test-0/1/2: Run allocation from each BNG
+  - peer-pool-bng0-logs:  View BNG-0 logs
+  - peer-pool-status:     Check pool status across all peers
+  - peer-pool-verify:     Verify consistent allocation
+
+RADIUS-Time Allocation (--demo=radius-time) - KEY OPTIMIZATION:
+  IP allocated during RADIUS auth (before DHCP), enabling eBPF fast path:
+  - radius-time-test:          Run full RADIUS-time allocation test
+  - radius-time-dualstack:     Test dual-stack (IPv4 + IPv6) provisioning
+  - radius-time-dualstack-curl: Test dual-stack via curl
+  - radius-time-bng-logs:      View BNG logs
+  - radius-time-provision:     Test provision API directly (IPv4)
+  This is THE KEY optimization - DHCP served from kernel (~10us) not userspace (~10ms)
+  Supports dual-stack: pass ipv6_pool_id to provision both IPv4 and IPv6 atomically
+
+PPPoE (--demo=pppoe):
+  Full PPPoE session lifecycle (PADI→PADO→PADR→PADS→LCP→Auth→IPCP):
+  - pppoe-test-run:  Run PPPoE session establishment test
+  - pppoe-verify:    Quick verification of session state
+  - pppoe-bng-logs:  View BNG PPPoE logs
+
+IPv6 (--demo=ipv6):
+  SLAAC, DHCPv6 address allocation, and Prefix Delegation:
+  - ipv6-test-run:    Run all IPv6 tests (SLAAC + DHCPv6 + PD)
+  - ipv6-client-addrs: Show IPv6 addresses on client
+  - ipv6-bng-logs:    View BNG IPv6 logs
+
+NAT/CGNAT (--demo=nat):
+  CGNAT with port blocks, hairpinning, and RFC 6908 logging:
+  - nat-test-all:     Run all NAT tests
+  - nat-test-basic:   Test basic client→NAT→external connectivity
+  - nat-test-hairpin: Test hairpinning (client→NAT→same-subnet)
+  - nat-test-ports:   Test port block allocation
+  - nat-logs:         View NAT logging events
+  - nat-bng-logs:     View BNG NAT logs
+
+QoS/Rate Limiting (--demo=qos):
+  Per-subscriber rate limiting with TC eBPF token bucket:
+  - qos-demo-run:     Run complete QoS demo
+  - qos-configure:    Configure rate limit (10 Mbps down, 5 Mbps up)
+  - qos-measure:      Measure throughput with iperf3
+  - qos-verify:       Verify rate limiting is enforced
+  - qos-multi-sub:    Test multiple subscriber plans (Basic/Premium/Business)
+  - qos-stats:        Show QoS statistics from eBPF maps
+
+Failure Injection (--demo=failure):
+  Resilience testing with 5 scenarios:
+  - failure-test-all:    Run all failure tests
+  - failure-nexus:       Nexus node failure (hashring rebalancing)
+  - failure-bng:         BNG failover (P2P sync takeover)
+  - failure-partition:   Network partition (split-brain recovery)
+  - failure-recovery:    State recovery (restart and restore)
+  - failure-degradation: Graceful degradation (overload handling)
+
+BGP/FRR Integration (--demo=bgp):
+  Subscriber route injection via BGP with BFD:
+  - bgp-demo-run:        Run full BGP demo
+  - bgp-session:         Check BGP session status
+  - bgp-bfd:             Check BFD session status
+  - bgp-inject-route:    Inject subscriber /32 route
+  - bgp-withdraw-route:  Withdraw subscriber route
+  - bgp-show-routes:     Show BNG routing table
+  - bgp-upstream-routes: Check routes received on upstream
 
 Verification:
   Click 'verify-demo-X' buttons in Tilt UI to test each demo

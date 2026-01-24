@@ -1,0 +1,18 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+metadata:
+  name: failure-test
+  annotations:
+    description: "Failure Injection / Resilience demo for BNG system"
+
+resources:
+  - deployment.yaml
+
+# Common labels for all resources
+labels:
+  - pairs:
+      app.kubernetes.io/name: failure-test
+      app.kubernetes.io/part-of: bng-edge
+      app.kubernetes.io/component: resilience-testing
+    includeSelectors: false

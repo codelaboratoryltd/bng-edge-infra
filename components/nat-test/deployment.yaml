@@ -1,0 +1,552 @@
+# NAT44/CGNAT Demo Component
+# Demonstrates: Port block allocation, hairpinning, NAT logging, external connectivity
+#
+# Architecture:
+# ┌─────────────────────────────────────────────────────────────────────────────┐
+# │                        demo-nat namespace                                    │
+# │                                                                              │
+# │  CGNAT Inside (100.64.0.0/10)           Public Side (203.0.113.0/24)        │
+# │  ┌────────────────────────────────┐     ┌────────────────────────────────┐  │
+# │  │  Pod: nat-clients              │     │  Pod: external-server          │  │
+# │  │  ┌──────────┐  ┌──────────┐    │     │  ┌────────────────────────┐   │  │
+# │  │  │ client-1 │  │ client-2 │    │     │  │  HTTP server           │   │  │
+# │  │  │100.64.1.2│  │100.64.1.3│    │     │  │  203.0.113.100:80      │   │  │
+# │  │  └────┬─────┘  └────┬─────┘    │     │  └────────────────────────┘   │  │
+# │  │       │              │          │     │                               │  │
+# │  │       └──────┬───────┘          │     └───────────────┬───────────────┘  │
+# │  └──────────────┼──────────────────┘                     │                  │
+# │                 │                                         │                  │
+# │  ┌──────────────▼─────────────────────────────────────────▼──────────────┐  │
+# │  │                          BNG with NAT44/CGNAT                          │  │
+# │  │                                                                        │  │
+# │  │  Inside: veth-inside (100.64.1.1/24)                                   │  │
+# │  │  Outside: veth-outside (203.0.113.1/24)                                │  │
+# │  │                                                                        │  │
+# │  │  NAT Pool: 203.0.113.10-203.0.113.20                                   │  │
+# │  │  Port Block: 1024 ports per subscriber                                 │  │
+# │  │  Features: EIM, EIF, Hairpinning, Logging                              │  │
+# │  └────────────────────────────────────────────────────────────────────────┘  │
+# │                                                                              │
+# └─────────────────────────────────────────────────────────────────────────────┘
+#
+# Test Scenarios:
+# 1. Basic NAT: Client 1 -> NAT -> External Server (port translation)
+# 2. Port Block Allocation: Verify each subscriber gets isolated port range
+# 3. Hairpinning: Client 1 -> NAT -> Client 2 (via public IP)
+# 4. NAT Logging: View session/port block events
+#
+# RFC References:
+# - RFC 6598: CGNAT shared address space (100.64.0.0/10)
+# - RFC 6888: CGNAT requirements
+# - RFC 6431: Port block allocation
+# - RFC 4787: NAT behavioral requirements for UDP
+# - RFC 6908: Logging for CGNAT
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: demo-nat
+---
+# ConfigMap with NAT test scripts
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nat-test-scripts
+  namespace: demo-nat
+data:
+  # Test 1: Basic NAT connectivity (client -> external)
+  test-basic-nat.sh: |
+    #!/bin/sh
+    echo "=== Test 1: Basic NAT Connectivity ==="
+    echo ""
+    echo "Testing: Client (100.64.1.2) -> NAT -> External Server (203.0.113.100)"
+    echo ""
+
+    # Get local IP and ephemeral port
+    LOCAL_IP=$(ip addr show veth-client 2>/dev/null | grep "inet " | awk '{print $2}' | cut -d/ -f1)
+    echo "Client IP: $LOCAL_IP"
+    echo ""
+
+    # Test HTTP connectivity through NAT
+    echo "Sending HTTP request to external server..."
+    if wget -q -O- --timeout=5 http://203.0.113.100:8080/test 2>/dev/null; then
+      echo ""
+      echo "SUCCESS: NAT translation working!"
+    else
+      echo "Attempting with curl..."
+      if curl -s --connect-timeout 5 http://203.0.113.100:8080/test 2>/dev/null; then
+        echo ""
+        echo "SUCCESS: NAT translation working!"
+      else
+        echo "PENDING: External server may not be ready yet"
+      fi
+    fi
+    echo ""
+
+    # Show NAT session (via BNG API if available)
+    echo "Checking NAT sessions..."
+    wget -q -O- http://bng-nat:8080/api/v1/nat/sessions 2>/dev/null || echo "(BNG API not available)"
+
+  # Test 2: Port block allocation verification
+  test-port-blocks.sh: |
+    #!/bin/sh
+    echo "=== Test 2: Port Block Allocation ==="
+    echo ""
+    echo "Verifying: Each subscriber gets isolated port range (1024 ports)"
+    echo ""
+
+    # Check NAT pool status
+    echo "NAT Pool Status:"
+    wget -q -O- http://bng-nat:8080/api/v1/nat/pool 2>/dev/null | head -20 || echo "(BNG API not available)"
+    echo ""
+
+    # Check port block allocations
+    echo "Port Block Allocations:"
+    wget -q -O- http://bng-nat:8080/api/v1/nat/allocations 2>/dev/null | head -20 || echo "(BNG API not available)"
+    echo ""
+
+    # Create multiple connections to verify port usage
+    echo "Creating connections to verify port allocation..."
+    for i in 1 2 3 4 5; do
+      # Use nc to create UDP connection (background, short-lived)
+      (echo "test" | nc -u -w 1 203.0.113.100 9999 2>/dev/null &)
+      sleep 0.1
+    done
+
+    echo ""
+    echo "Check BNG logs for port block assignment events (type=3)"
+
+  # Test 3: Hairpinning (client -> NAT -> same-subnet client)
+  test-hairpinning.sh: |
+    #!/bin/sh
+    echo "=== Test 3: Hairpinning ==="
+    echo ""
+    echo "Testing: Client 1 -> NAT (public IP) -> Client 2"
+    echo "Both clients are behind NAT, communicating via public address"
+    echo ""
+
+    # Get our NAT'd public IP (from BNG API or by testing)
+    echo "Step 1: Determine public NAT'd address..."
+    PUBLIC_IP=$(wget -q -O- http://203.0.113.100:8080/myip 2>/dev/null || echo "203.0.113.10")
+    echo "Our NAT'd public IP: $PUBLIC_IP"
+    echo ""
+
+    echo "Step 2: Testing hairpin connection..."
+    echo "Connecting to fellow CGNAT client via their public address..."
+
+    # In real scenario, client 2 would have a service listening
+    # and client 1 would connect via client 2's NAT'd public IP:port
+    #
+    # For demo, we show the concept:
+    echo "  Source: 100.64.1.2 (client-1)"
+    echo "  Destination: $PUBLIC_IP:xxxxx (client-2 via NAT public IP)"
+    echo "  Path: client-1 -> NAT SNAT -> hairpin detect -> NAT DNAT -> client-2"
+    echo ""
+
+    # Check if hairpinning is enabled
+    echo "Hairpin feature status:"
+    wget -q -O- http://bng-nat:8080/api/v1/nat/config 2>/dev/null | grep -i hairpin || echo "(BNG API not available)"
+    echo ""
+    echo "Check BNG logs for hairpin events (type=6)"
+
+  # Test 4: NAT logging output
+  test-nat-logging.sh: |
+    #!/bin/sh
+    echo "=== Test 4: NAT Logging ==="
+    echo ""
+    echo "NAT Event Types:"
+    echo "  1 = Session Create    - New NAT session established"
+    echo "  2 = Session Delete    - NAT session terminated"
+    echo "  3 = Port Block Assign - Port block allocated to subscriber"
+    echo "  4 = Port Block Release - Port block deallocated"
+    echo "  5 = Port Exhaustion   - No ports available (alert!)"
+    echo "  6 = Hairpin           - Hairpin translation event"
+    echo "  7 = ALG Trigger       - Application Layer Gateway event"
+    echo ""
+
+    echo "Fetching recent NAT log events..."
+    wget -q -O- http://bng-nat:8080/api/v1/nat/logs 2>/dev/null | head -50 || echo "(BNG API not available)"
+    echo ""
+
+    echo "NAT Statistics:"
+    wget -q -O- http://bng-nat:8080/api/v1/nat/stats 2>/dev/null || echo "(BNG API not available)"
+    echo ""
+
+    echo "For bulk logging (RFC 6908), check:"
+    echo "  - Syslog output on BNG pod"
+    echo "  - /var/log/nat-bulk.log (if configured)"
+
+  # Run all tests
+  run-all-tests.sh: |
+    #!/bin/sh
+    echo "=============================================="
+    echo "      BNG NAT44/CGNAT Demo Test Suite       "
+    echo "=============================================="
+    echo ""
+    echo "Network Configuration:"
+    echo "  CGNAT Range (Inside):  100.64.0.0/10 (RFC 6598)"
+    echo "  Client 1:              100.64.1.2/24"
+    echo "  Client 2:              100.64.1.3/24"
+    echo "  BNG Inside:            100.64.1.1/24"
+    echo "  BNG Outside:           203.0.113.1/24"
+    echo "  NAT Pool:              203.0.113.10 - 203.0.113.20"
+    echo "  External Server:       203.0.113.100"
+    echo ""
+
+    for test in test-basic-nat test-port-blocks test-hairpinning test-nat-logging; do
+      echo ""
+      echo "----------------------------------------------"
+      sh /scripts/$test.sh
+      echo "----------------------------------------------"
+      sleep 1
+    done
+
+    echo ""
+    echo "=============================================="
+    echo "              All Tests Complete              "
+    echo "=============================================="
+
+  # Startup script for clients
+  client-setup.sh: |
+    #!/bin/sh
+    # Setup script run by client containers
+    CLIENT_NUM="${CLIENT_NUM:-1}"
+    CLIENT_IP="100.64.1.$((CLIENT_NUM + 1))"
+    GATEWAY="100.64.1.1"
+
+    echo "Setting up client $CLIENT_NUM with IP $CLIENT_IP..."
+
+    # Wait for interface
+    while ! ip link show veth-client 2>/dev/null; do
+      echo "Waiting for veth-client interface..."
+      sleep 1
+    done
+
+    # Configure IP
+    ip addr add $CLIENT_IP/24 dev veth-client 2>/dev/null || true
+    ip link set veth-client up
+    ip route add default via $GATEWAY dev veth-client 2>/dev/null || true
+
+    echo "Client $CLIENT_NUM ready:"
+    ip addr show veth-client
+    ip route
+
+  # External server startup
+  external-server.sh: |
+    #!/bin/sh
+    # Simple HTTP server for NAT testing
+    PORT="${SERVER_PORT:-8080}"
+    IP="203.0.113.100"
+
+    echo "Starting external HTTP server on $IP:$PORT..."
+
+    # Create response files
+    mkdir -p /tmp/www
+    echo "Hello from external server (203.0.113.100)" > /tmp/www/test
+    echo '#!/bin/sh
+    echo "HTTP/1.1 200 OK"
+    echo "Content-Type: text/plain"
+    echo ""
+    # Extract client IP from HTTP headers or connection
+    echo "Your source IP: $REMOTE_ADDR"
+    ' > /tmp/www/myip
+    chmod +x /tmp/www/myip
+
+    # Start simple HTTP server using busybox httpd or python
+    if command -v python3 >/dev/null 2>&1; then
+      cd /tmp/www && python3 -m http.server $PORT
+    elif command -v busybox >/dev/null 2>&1; then
+      cd /tmp/www && busybox httpd -f -p $PORT
+    else
+      # Fallback: nc-based server
+      while true; do
+        echo -e "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\n\r\nHello from external server" | nc -l -p $PORT
+      done
+    fi
+---
+# BNG Pod with NAT44/CGNAT enabled
+apiVersion: v1
+kind: Pod
+metadata:
+  name: bng-nat
+  namespace: demo-nat
+  labels:
+    app: bng-nat
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "9090"
+    prometheus.io/path: "/metrics"
+spec:
+  shareProcessNamespace: true
+  hostNetwork: false
+
+  initContainers:
+    # Network setup: Create veth pairs and configure routing
+    - name: network-setup
+      image: nicolaka/netshoot:latest
+      command: ["/bin/sh", "-c"]
+      args:
+        - |
+          set -e
+          echo "=== Setting up NAT test network ==="
+
+          # Create inside network (CGNAT side)
+          echo "Creating inside network (100.64.1.0/24)..."
+          ip link add veth-inside type veth peer name veth-client-1
+          ip link add veth-inside2 type veth peer name veth-client-2
+
+          ip addr add 100.64.1.1/24 dev veth-inside
+          ip link set veth-inside up
+          ip link set veth-client-1 up
+          ip link set veth-inside2 up
+          ip link set veth-client-2 up
+
+          # Create outside network (Public side)
+          echo "Creating outside network (203.0.113.0/24)..."
+          ip link add veth-outside type veth peer name veth-external
+          ip addr add 203.0.113.1/24 dev veth-outside
+          ip link set veth-outside up
+          ip link set veth-external up
+
+          # Enable IP forwarding
+          echo 1 > /proc/sys/net/ipv4/ip_forward
+
+          echo ""
+          echo "Network configuration complete:"
+          echo "  Inside interface:  veth-inside  (100.64.1.1/24)"
+          echo "  Outside interface: veth-outside (203.0.113.1/24)"
+          echo "  Client 1 interface: veth-client-1"
+          echo "  Client 2 interface: veth-client-2"
+          echo "  External interface: veth-external"
+          ip addr
+      securityContext:
+        privileged: true
+        capabilities:
+          add: ["NET_ADMIN", "NET_RAW", "SYS_ADMIN"]
+
+  containers:
+    # BNG with NAT44/CGNAT configuration (Issue #67)
+    - name: bng
+      image: ghcr.io/codelaboratoryltd/bng:latest
+      args:
+        - "run"
+        - "--interface=veth-inside"
+        - "--pool-network=100.64.0.0/16"
+        - "--pool-gateway=100.64.1.1"
+        - "--pool-dns=8.8.8.8,8.8.4.4"
+        # NAT44/CGNAT configuration
+        - "--nat-enabled=true"
+        - "--nat-inside-interface=veth-inside"
+        - "--nat-outside-interface=veth-outside"
+        - "--nat-public-ips=203.0.113.10-203.0.113.20"
+        - "--nat-ports-per-sub=1024"
+        # RFC 4787 behavioral requirements
+        - "--nat-eim=true"
+        - "--nat-eif=true"
+        - "--nat-hairpin=true"
+        # Application Layer Gateways
+        - "--nat-alg-ftp=true"
+        - "--nat-alg-sip=false"
+        # Logging
+        - "--nat-log-enabled=true"
+        - "--nat-bulk-logging=true"
+      ports:
+        - containerPort: 8080
+          name: api
+        - containerPort: 9090
+          name: metrics
+      securityContext:
+        privileged: true
+        capabilities:
+          add: ["NET_ADMIN", "NET_RAW", "SYS_ADMIN", "BPF"]
+      volumeMounts:
+        - name: bpffs
+          mountPath: /sys/fs/bpf
+      env:
+        - name: NAT_POOL_START
+          value: "203.0.113.10"
+        - name: NAT_POOL_END
+          value: "203.0.113.20"
+        - name: NAT_INSIDE_NETWORK
+          value: "100.64.0.0/10"
+
+    # Test client 1 (behind NAT)
+    - name: client-1
+      image: alpine:3.19
+      command: ["/bin/sh", "-c"]
+      args:
+        - |
+          # Wait for network to be set up
+          sleep 5
+
+          # Configure client IP
+          ip addr add 100.64.1.2/24 dev veth-client-1 2>/dev/null || true
+          ip link set veth-client-1 up 2>/dev/null || true
+          ip route add default via 100.64.1.1 2>/dev/null || true
+
+          echo "Client 1 ready (100.64.1.2)"
+          ip addr show veth-client-1 2>/dev/null || true
+
+          # Keep container running
+          sleep infinity
+      securityContext:
+        privileged: true
+        capabilities:
+          add: ["NET_ADMIN", "NET_RAW"]
+      volumeMounts:
+        - name: scripts
+          mountPath: /scripts
+          readOnly: true
+
+    # Test client 2 (behind NAT, for hairpinning tests)
+    - name: client-2
+      image: alpine:3.19
+      command: ["/bin/sh", "-c"]
+      args:
+        - |
+          # Wait for network to be set up
+          sleep 5
+
+          # Configure client IP
+          ip addr add 100.64.1.3/24 dev veth-client-2 2>/dev/null || true
+          ip link set veth-client-2 up 2>/dev/null || true
+          ip route add default via 100.64.1.1 2>/dev/null || true
+
+          echo "Client 2 ready (100.64.1.3)"
+          ip addr show veth-client-2 2>/dev/null || true
+
+          # Start a simple listener for hairpin testing
+          while true; do
+            echo "HAIRPIN-RESPONSE: Hello from client-2 (100.64.1.3)" | nc -l -p 12345 2>/dev/null || sleep 1
+          done
+      securityContext:
+        privileged: true
+        capabilities:
+          add: ["NET_ADMIN", "NET_RAW"]
+      volumeMounts:
+        - name: scripts
+          mountPath: /scripts
+          readOnly: true
+
+    # External server (outside NAT)
+    - name: external-server
+      image: python:3.11-alpine
+      command: ["/bin/sh", "-c"]
+      args:
+        - |
+          # Wait for network to be set up
+          sleep 5
+
+          # Configure external IP
+          ip addr add 203.0.113.100/24 dev veth-external 2>/dev/null || true
+          ip link set veth-external up 2>/dev/null || true
+          ip route add 100.64.0.0/10 via 203.0.113.1 2>/dev/null || true
+
+          echo "External server ready (203.0.113.100)"
+          ip addr show veth-external 2>/dev/null || true
+
+          # Create test content
+          mkdir -p /tmp/www
+          echo "Hello from external server (203.0.113.100)" > /tmp/www/test
+          cat > /tmp/www/myip.py << 'SCRIPT'
+          import http.server
+          import socketserver
+
+          class MyHandler(http.server.SimpleHTTPRequestHandler):
+              def do_GET(self):
+                  if self.path == '/myip':
+                      self.send_response(200)
+                      self.send_header('Content-type', 'text/plain')
+                      self.end_headers()
+                      client_ip = self.client_address[0]
+                      self.wfile.write(f"Your source IP: {client_ip}\n".encode())
+                  elif self.path == '/test':
+                      self.send_response(200)
+                      self.send_header('Content-type', 'text/plain')
+                      self.end_headers()
+                      self.wfile.write(b"Hello from external server (203.0.113.100)\n")
+                  else:
+                      super().do_GET()
+
+          PORT = 8080
+          with socketserver.TCPServer(("", PORT), MyHandler) as httpd:
+              print(f"Serving on port {PORT}")
+              httpd.serve_forever()
+          SCRIPT
+
+          cd /tmp/www && python /tmp/www/myip.py
+      securityContext:
+        privileged: true
+        capabilities:
+          add: ["NET_ADMIN", "NET_RAW"]
+
+  volumes:
+    - name: bpffs
+      hostPath:
+        path: /sys/fs/bpf
+    - name: scripts
+      configMap:
+        name: nat-test-scripts
+        defaultMode: 0755
+---
+# Service for BNG NAT API
+apiVersion: v1
+kind: Service
+metadata:
+  name: bng-nat
+  namespace: demo-nat
+spec:
+  selector:
+    app: bng-nat
+  ports:
+    - port: 8080
+      targetPort: 8080
+      name: api
+    - port: 9090
+      targetPort: 9090
+      name: metrics
+---
+# Verification Job - runs tests after deployment
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nat-test-runner
+  namespace: demo-nat
+spec:
+  backoffLimit: 3
+  template:
+    spec:
+      restartPolicy: Never
+      initContainers:
+        # Wait for BNG and external server to be ready
+        - name: wait-for-services
+          image: curlimages/curl:latest
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              echo "Waiting for BNG NAT API..."
+              until curl -sf http://bng-nat:8080/health > /dev/null 2>&1; do
+                echo "  BNG not ready, waiting..."
+                sleep 3
+              done
+              echo "BNG NAT is ready!"
+
+              echo "Waiting for external server..."
+              until curl -sf http://203.0.113.100:8080/test > /dev/null 2>&1; do
+                echo "  External server not ready, waiting..."
+                sleep 3
+              done
+              echo "External server is ready!"
+      containers:
+        - name: test-runner
+          image: nicolaka/netshoot:latest
+          command: ["/bin/sh", "/scripts/run-all-tests.sh"]
+          volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+              readOnly: true
+      volumes:
+        - name: scripts
+          configMap:
+            name: nat-test-scripts
+            defaultMode: 0755

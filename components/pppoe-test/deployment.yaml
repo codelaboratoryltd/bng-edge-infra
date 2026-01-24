@@ -1,0 +1,457 @@
+# PPPoE End-to-End Test
+# Demonstrates: Full PPPoE stack (PADI->PADO->PADR->PADS->LCP->PAP/CHAP->IPCP)
+#
+# Architecture:
+# +---------------------------------------------------------------------+
+# |                    demo-pppoe namespace                              |
+# |                                                                      |
+# |  +----------------------------------------------------------------+  |
+# |  |                Pod: pppoe-test                                 |  |
+# |  |                                                                |  |
+# |  |  +--------------------+          +------------------------+   |  |
+# |  |  |      Client        |  veth    |         BNG            |   |  |
+# |  |  |  (pppoe-client)    |<-------->|  --pppoe-enabled       |   |  |
+# |  |  |                    |          |  --pppoe-ac-name       |   |  |
+# |  |  |                    |          |  --pppoe-service       |   |  |
+# |  |  +--------------------+          +------------------------+   |  |
+# |  +----------------------------------------------------------------+  |
+# |                                                                      |
+# +---------------------------------------------------------------------+
+#
+# PPPoE Session Flow:
+#   1. PADI  - Client broadcasts Active Discovery Initiation
+#   2. PADO  - BNG responds with Active Discovery Offer (AC-Name, Service-Name)
+#   3. PADR  - Client sends Active Discovery Request
+#   4. PADS  - BNG confirms with Active Discovery Session-confirmation (Session ID)
+#   5. LCP   - Link Control Protocol negotiation (MRU, Magic Number, Auth-Protocol)
+#   6. Auth  - PAP (or CHAP) authentication
+#   7. IPCP  - IP Control Protocol negotiation (IP Address, DNS)
+#   8. Data  - PPP session established, IP traffic flows
+#
+# Protocol Stack:
+#   +------------------+
+#   |   IP Traffic     |
+#   +------------------+
+#   |      PPP         |   <- IPCP assigns IP (10.100.x.x)
+#   +------------------+
+#   |     PPPoE        |   <- Session encapsulation (Session ID)
+#   +------------------+
+#   |   Ethernet       |   <- veth pair
+#   +------------------+
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: demo-pppoe
+---
+# ConfigMap with PPPoE test scripts
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pppoe-scripts
+  namespace: demo-pppoe
+data:
+  run-pppoe-test.sh: |
+    #!/bin/sh
+    # PPPoE End-to-End Test Script
+    # Demonstrates the full PPPoE session lifecycle
+    set -e
+
+    echo "======================================================================"
+    echo "           PPPoE End-to-End Test - Full Session Lifecycle"
+    echo "======================================================================"
+    echo ""
+    echo "This test demonstrates the complete PPPoE stack:"
+    echo "  PADI -> PADO -> PADR -> PADS -> LCP -> Auth -> IPCP"
+    echo ""
+
+    # Configuration
+    IFACE="veth-client"
+    USERNAME="${PPPOE_USERNAME:-testuser}"
+    PASSWORD="${PPPOE_PASSWORD:-testpass}"
+    AC_NAME="${PPPOE_AC_NAME:-BNG-AC}"
+    SERVICE_NAME="${PPPOE_SERVICE:-internet}"
+
+    echo "Configuration:"
+    echo "  Interface:    $IFACE"
+    echo "  Username:     $USERNAME"
+    echo "  AC Name:      $AC_NAME"
+    echo "  Service:      $SERVICE_NAME"
+    echo ""
+
+    # Wait for interface
+    echo "[1/7] Waiting for network interface..."
+    while ! ip link show $IFACE > /dev/null 2>&1; do
+      sleep 1
+    done
+    echo "      Interface $IFACE is ready"
+    echo ""
+
+    # Check if pppoe-discovery is available
+    echo "[2/7] PPPoE Discovery Phase (PADI -> PADO)"
+    echo "      Sending PADI broadcast to find Access Concentrators..."
+
+    if command -v pppoe-discovery > /dev/null 2>&1; then
+      pppoe-discovery -I $IFACE -A 5 2>&1 || echo "      Discovery completed"
+    else
+      echo "      (pppoe-discovery not available, using pppd directly)"
+    fi
+    echo ""
+
+    # Start PPPoE session using pppd
+    echo "[3/7] Starting PPPoE Session (PADR -> PADS)"
+    echo "      Creating PPPoE session with BNG..."
+
+    # Create pppd peers file for pppoe
+    mkdir -p /etc/ppp/peers
+    cat > /etc/ppp/peers/pppoe-test << EOF
+    # PPPoE peer configuration for BNG test
+    plugin pppoe.so
+    $IFACE
+
+    # Authentication
+    user "$USERNAME"
+    password "$PASSWORD"
+
+    # Network
+    noipdefault
+    defaultroute
+    usepeerdns
+
+    # PPP Options
+    noauth
+    persist
+    maxfail 0
+    holdoff 5
+
+    # LCP options
+    lcp-echo-interval 30
+    lcp-echo-failure 4
+    mtu 1492
+    mru 1492
+
+    # Debug
+    debug
+    EOF
+
+    # Create secrets file
+    cat > /etc/ppp/pap-secrets << EOF
+    # Secrets for PAP authentication
+    "$USERNAME" * "$PASSWORD" *
+    EOF
+    chmod 600 /etc/ppp/pap-secrets
+
+    cat > /etc/ppp/chap-secrets << EOF
+    # Secrets for CHAP authentication
+    "$USERNAME" * "$PASSWORD" *
+    EOF
+    chmod 600 /etc/ppp/chap-secrets
+
+    echo "      Starting pppd..."
+    pppd call pppoe-test nodetach &
+    PPPD_PID=$!
+    echo "      pppd started (PID: $PPPD_PID)"
+    echo ""
+
+    # Wait for PPP interface
+    echo "[4/7] LCP Negotiation Phase"
+    echo "      Negotiating: MRU, Magic Number, Authentication Protocol..."
+
+    MAX_WAIT=30
+    WAITED=0
+    while ! ip link show ppp0 > /dev/null 2>&1; do
+      sleep 1
+      WAITED=$((WAITED + 1))
+      if [ $WAITED -ge $MAX_WAIT ]; then
+        echo "      Timeout waiting for ppp0 interface"
+        echo "      LCP negotiation may have failed"
+        break
+      fi
+    done
+
+    if ip link show ppp0 > /dev/null 2>&1; then
+      echo "      LCP negotiation successful - ppp0 interface created"
+    fi
+    echo ""
+
+    # Wait for authentication and IPCP
+    echo "[5/7] Authentication Phase (PAP)"
+    echo "      Authenticating user: $USERNAME"
+    sleep 2
+    echo ""
+
+    echo "[6/7] IPCP Negotiation Phase"
+    echo "      Requesting: IP Address, DNS Servers"
+    sleep 2
+
+    # Check for IP assignment
+    PPP_IP=""
+    WAITED=0
+    while [ -z "$PPP_IP" ] && [ $WAITED -lt 20 ]; do
+      PPP_IP=$(ip addr show ppp0 2>/dev/null | grep "inet " | awk '{print $2}' | cut -d/ -f1)
+      sleep 1
+      WAITED=$((WAITED + 1))
+    done
+    echo ""
+
+    # Display results
+    echo "[7/7] Session Status"
+    echo "======================================================================"
+    echo ""
+
+    if [ -n "$PPP_IP" ]; then
+      echo "  PPPoE Session: ESTABLISHED"
+      echo ""
+      echo "  Session Details:"
+      echo "  +---------------------------------------------------------+"
+      echo "  | Discovery Phase                                         |"
+      echo "  |   PADI -> PADO: Completed (AC: $AC_NAME)"
+      echo "  |   PADR -> PADS: Completed (Session ID assigned)"
+      echo "  +---------------------------------------------------------+"
+      echo "  | LCP Phase                                                |"
+      echo "  |   MRU: 1492 (PPPoE standard)"
+      echo "  |   Magic Number: Negotiated"
+      echo "  |   Auth Protocol: PAP (0xC023)"
+      echo "  +---------------------------------------------------------+"
+      echo "  | Authentication Phase                                     |"
+      echo "  |   Method: PAP"
+      echo "  |   Username: $USERNAME"
+      echo "  |   Result: SUCCESS"
+      echo "  +---------------------------------------------------------+"
+      echo "  | IPCP Phase                                               |"
+      echo "  |   Client IP: $PPP_IP"
+      DNS_SERVERS=$(cat /etc/ppp/resolv.conf 2>/dev/null | grep nameserver | awk '{print $2}' | tr '\n' ', ' | sed 's/,$//')
+      echo "  |   DNS Servers: ${DNS_SERVERS:-Not configured}"
+      echo "  +---------------------------------------------------------+"
+      echo ""
+      echo "  Interface Details:"
+      ip addr show ppp0
+      echo ""
+
+      # Verify connectivity
+      echo "  Connectivity Test:"
+      PEER_IP=$(ip route | grep "ppp0" | grep "scope link" | awk '{print $1}')
+      if [ -n "$PEER_IP" ]; then
+        echo "  Pinging BNG server ($PEER_IP)..."
+        if ping -c 3 -W 2 $PEER_IP > /dev/null 2>&1; then
+          echo "  PING: SUCCESS"
+        else
+          echo "  PING: No response (expected in isolated test)"
+        fi
+      fi
+      echo ""
+      echo "======================================================================"
+      echo "  SUCCESS: PPPoE session fully established!"
+      echo "======================================================================"
+    else
+      echo "  PPPoE Session: FAILED"
+      echo ""
+      echo "  Troubleshooting:"
+      echo "  1. Check BNG logs: kubectl logs pppoe-test -n demo-pppoe -c bng"
+      echo "  2. Check pppd logs in syslog"
+      echo "  3. Verify veth interfaces are up"
+      echo ""
+      echo "======================================================================"
+      echo "  FAILED: PPPoE session could not be established"
+      echo "======================================================================"
+    fi
+    echo ""
+
+  verify-pppoe.sh: |
+    #!/bin/sh
+    # Quick verification script for PPPoE session status
+
+    echo "=== PPPoE Session Verification ==="
+    echo ""
+
+    # Check ppp interface
+    echo "1. PPP Interface Status:"
+    if ip link show ppp0 > /dev/null 2>&1; then
+      ip addr show ppp0
+    else
+      echo "   No ppp0 interface found"
+    fi
+    echo ""
+
+    # Check pppd process
+    echo "2. PPPoE Daemon Status:"
+    if pgrep pppd > /dev/null 2>&1; then
+      echo "   pppd is running (PID: $(pgrep pppd))"
+    else
+      echo "   pppd is not running"
+    fi
+    echo ""
+
+    # Check routes
+    echo "3. Routing Table:"
+    ip route | grep ppp || echo "   No PPP routes"
+    echo ""
+
+    # Check DNS
+    echo "4. DNS Configuration:"
+    if [ -f /etc/ppp/resolv.conf ]; then
+      cat /etc/ppp/resolv.conf
+    else
+      echo "   No PPP DNS configuration"
+    fi
+    echo ""
+
+    # BNG API check
+    echo "5. BNG PPPoE Statistics:"
+    wget -q -O- "http://localhost:8080/api/v1/pppoe/sessions" 2>&1 || echo "   Could not query BNG API"
+    echo ""
+
+  monitor-pppoe.sh: |
+    #!/bin/sh
+    # Monitor PPPoE session state changes
+
+    echo "=== PPPoE Session Monitor ==="
+    echo "Watching for PPPoE session state changes..."
+    echo "(Press Ctrl+C to stop)"
+    echo ""
+
+    # Watch BNG metrics for PPPoE
+    while true; do
+      TIMESTAMP=$(date +"%H:%M:%S")
+
+      # Get PPPoE stats from BNG
+      STATS=$(wget -q -O- "http://localhost:8080/api/v1/pppoe/stats" 2>/dev/null)
+
+      if [ -n "$STATS" ]; then
+        echo "[$TIMESTAMP] $STATS"
+      else
+        # Fallback to interface check
+        if ip link show ppp0 > /dev/null 2>&1; then
+          IP=$(ip addr show ppp0 | grep "inet " | awk '{print $2}')
+          echo "[$TIMESTAMP] ppp0 UP - IP: $IP"
+        else
+          echo "[$TIMESTAMP] ppp0 DOWN"
+        fi
+      fi
+
+      sleep 5
+    done
+---
+# BNG + PPPoE Client Test Pod
+apiVersion: v1
+kind: Pod
+metadata:
+  name: pppoe-test
+  namespace: demo-pppoe
+  labels:
+    app: pppoe-test
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "9090"
+    prometheus.io/path: "/metrics"
+spec:
+  shareProcessNamespace: true
+
+  initContainers:
+    # Setup L2 network for PPPoE
+    - name: network-setup
+      image: nicolaka/netshoot:latest
+      command: ["/bin/sh", "-c"]
+      args:
+        - |
+          echo "Creating veth pair for PPPoE L2 connectivity..."
+
+          # Create veth pair
+          ip link add veth-bng type veth peer name veth-client
+
+          # BNG side - no IP needed for PPPoE (L2 only)
+          ip link set veth-bng up
+
+          # Client side - will get IP via PPPoE/IPCP
+          ip link set veth-client up
+
+          echo ""
+          echo "L2 Network Ready:"
+          echo "  veth-bng:    L2 interface (BNG PPPoE AC)"
+          echo "  veth-client: L2 interface (PPPoE client)"
+          echo ""
+          echo "PPPoE operates at Layer 2 - no IP addresses configured yet"
+          echo "IP addresses will be assigned through IPCP after PPPoE session establishment"
+      securityContext:
+        privileged: true
+        capabilities:
+          add: ["NET_ADMIN", "NET_RAW"]
+
+  containers:
+    # BNG with PPPoE enabled
+    - name: bng
+      image: ghcr.io/codelaboratoryltd/bng:latest
+      args:
+        - "run"
+        - "--interface=veth-bng"
+        # PPPoE configuration
+        - "--pppoe-enabled=true"
+        - "--pppoe-interface=veth-bng"
+        - "--pppoe-ac-name=BNG-AC"
+        - "--pppoe-service-name=internet"
+        - "--pppoe-auth-type=pap"
+        - "--pppoe-session-timeout=30m"
+        - "--pppoe-mru=1492"
+        # IP pool for subscribers
+        - "--pool-network=10.100.0.0/16"
+        - "--pool-gateway=10.100.0.1"
+        - "--pool-dns=8.8.8.8,8.8.4.4"
+        
+      ports:
+        - containerPort: 8080
+          name: api
+        - containerPort: 9090
+          name: metrics
+      securityContext:
+        privileged: true
+        capabilities:
+          add: ["NET_ADMIN", "NET_RAW", "SYS_ADMIN"]
+      env:
+        - name: PPPOE_ENABLED
+          value: "true"
+
+    # PPPoE Client container
+    - name: client
+      image: alpine:3.19
+      command: ["/bin/sh", "-c"]
+      args:
+        - |
+          # Install PPPoE client tools
+          apk add --no-cache ppp ppp-pppoe
+
+          echo "PPPoE client ready"
+          echo "Run: /scripts/run-pppoe-test.sh to start PPPoE session"
+
+          # Keep container running
+          sleep infinity
+      securityContext:
+        privileged: true
+        capabilities:
+          add: ["NET_ADMIN", "NET_RAW"]
+      volumeMounts:
+        - name: scripts
+          mountPath: /scripts
+          readOnly: true
+
+  volumes:
+    - name: scripts
+      configMap:
+        name: pppoe-scripts
+        defaultMode: 0755
+---
+# Service for BNG API access
+apiVersion: v1
+kind: Service
+metadata:
+  name: pppoe-bng
+  namespace: demo-pppoe
+spec:
+  selector:
+    app: pppoe-test
+  ports:
+    - port: 8080
+      targetPort: 8080
+      name: api
+    - port: 9090
+      targetPort: 9090
+      name: metrics

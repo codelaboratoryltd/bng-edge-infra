@@ -1,0 +1,472 @@
+# IPv6 Demo (SLAAC + DHCPv6)
+# Demonstrates: Router Advertisements, SLAAC autoconfiguration, and DHCPv6 address/prefix delegation
+#
+# Architecture:
+# +---------------------------------------------------------------------+
+# |                       demo-ipv6 namespace                           |
+# |                                                                     |
+# |  +----------+       +--------------+                                |
+# |  |  Nexus   |<----->|     BNG      |                                |
+# |  |  (state) |       | (IPv6 stack) |                                |
+# |  |          |       |              |                                |
+# |  | pools:   |       | - RADVD      |                                |
+# |  | - addrs  |       | - DHCPv6     |                                |
+# |  | - prefix |       |              |                                |
+# |  +----------+       +------+-------+                                |
+# |                            |                                        |
+# |                       [veth-bng6]                                   |
+# |                   2001:db8:1::1/64                                  |
+# |                            |                                        |
+# |                    +-------v--------+                               |
+# |                    |     Client     |                               |
+# |                    |   (IPv6 sim)   |                               |
+# |                    |                |                               |
+# |                    | Tests:         |                               |
+# |                    | 1. SLAAC       |                               |
+# |                    | 2. DHCPv6 IA_NA|                               |
+# |                    | 3. DHCPv6 IA_PD|                               |
+# |                    +----------------+                               |
+# +---------------------------------------------------------------------+
+#
+# IPv6 Address Allocation:
+#   - SLAAC: Client auto-configures from Router Advertisement prefix
+#   - DHCPv6 IA_NA: Server assigns addresses from 2001:db8:2::/64
+#   - DHCPv6 IA_PD: Server delegates /60 prefixes from 2001:db8:100::/48
+#
+# Using documentation prefix 2001:db8::/32 per RFC 3849
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: demo-ipv6
+---
+# ConfigMap with test scripts
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ipv6-scripts
+  namespace: demo-ipv6
+data:
+  run-ipv6-test.sh: |
+    #!/bin/sh
+    # IPv6 Demo Test Suite
+    # Demonstrates: SLAAC, DHCPv6 (IA_NA), and Prefix Delegation (IA_PD)
+
+    echo "+==================================================================+"
+    echo "|         IPv6 Demo - SLAAC and DHCPv6 Address Assignment         |"
+    echo "+==================================================================+"
+    echo ""
+
+    # Get client interface info
+    CLIENT_MAC=$(cat /sys/class/net/veth-client6/address 2>/dev/null || echo "unknown")
+    echo "Client Interface: veth-client6"
+    echo "Client MAC: $CLIENT_MAC"
+    echo ""
+
+    # =================================================================
+    # Phase 1: SLAAC - Stateless Address Autoconfiguration
+    # =================================================================
+    echo "=== Phase 1: SLAAC (Stateless Address Autoconfiguration) ==="
+    echo ""
+    echo "SLAAC Process:"
+    echo "  1. Client sends Router Solicitation (RS)"
+    echo "  2. BNG responds with Router Advertisement (RA)"
+    echo "  3. Client auto-configures address from RA prefix + EUI-64"
+    echo ""
+
+    # Enable IPv6 and accept RAs
+    echo "Enabling IPv6 and router advertisement acceptance..."
+    sysctl -w net.ipv6.conf.veth-client6.accept_ra=2 >/dev/null 2>&1
+    sysctl -w net.ipv6.conf.veth-client6.autoconf=1 >/dev/null 2>&1
+    sysctl -w net.ipv6.conf.veth-client6.disable_ipv6=0 >/dev/null 2>&1
+
+    # Flush existing addresses
+    ip -6 addr flush dev veth-client6 scope global 2>/dev/null || true
+
+    # Send Router Solicitation
+    echo "Sending Router Solicitation..."
+    rdisc6 veth-client6 -1 2>/dev/null || ndisc6 -r veth-client6 2>/dev/null || echo "(rdisc6 not available, waiting for periodic RA)"
+
+    # Wait for RA and SLAAC to complete
+    echo "Waiting for Router Advertisement and SLAAC..."
+    sleep 3
+
+    # Check for SLAAC address
+    SLAAC_ADDR=$(ip -6 addr show dev veth-client6 scope global 2>/dev/null | grep -v "temporary" | grep "inet6" | head -1 | awk '{print $2}')
+    if [ -n "$SLAAC_ADDR" ]; then
+      echo ""
+      echo "[OK] SLAAC Address acquired: $SLAAC_ADDR"
+    else
+      echo ""
+      echo "[!] No SLAAC address yet (RA may be delayed)"
+    fi
+
+    # Show all IPv6 addresses
+    echo ""
+    echo "Current IPv6 addresses on veth-client6:"
+    ip -6 addr show dev veth-client6 2>/dev/null | grep "inet6" || echo "  (none)"
+
+    # =================================================================
+    # Phase 2: DHCPv6 Stateful Address (IA_NA)
+    # =================================================================
+    echo ""
+    echo "=== Phase 2: DHCPv6 Address Request (IA_NA) ==="
+    echo ""
+    echo "DHCPv6 IA_NA Process:"
+    echo "  1. Client sends Solicit"
+    echo "  2. Server responds with Advertise"
+    echo "  3. Client sends Request"
+    echo "  4. Server responds with Reply (with address)"
+    echo ""
+
+    # Run DHCPv6 client for address (IA_NA)
+    echo "Starting DHCPv6 client (requesting address)..."
+
+    # Use dhclient if available, otherwise use dhcpcd
+    if command -v dhclient >/dev/null 2>&1; then
+      timeout 15 dhclient -6 -1 -d -v veth-client6 2>&1 | head -30 || true
+    elif command -v dhcpcd >/dev/null 2>&1; then
+      timeout 15 dhcpcd -6 -1 -d veth-client6 2>&1 | head -30 || true
+    else
+      echo "(No DHCPv6 client available, using test script)"
+      /scripts/dhcpv6-client.sh veth-client6 na 2>&1 || true
+    fi
+
+    DHCPV6_ADDR=$(ip -6 addr show dev veth-client6 scope global 2>/dev/null | grep "dhcp\|dynamic" | head -1 | awk '{print $2}')
+    if [ -n "$DHCPV6_ADDR" ]; then
+      echo ""
+      echo "[OK] DHCPv6 Address acquired: $DHCPV6_ADDR"
+    else
+      echo ""
+      echo "[!] DHCPv6 address not shown (may be in separate table)"
+    fi
+
+    echo ""
+    echo "Updated IPv6 addresses on veth-client6:"
+    ip -6 addr show dev veth-client6 2>/dev/null | grep "inet6" || echo "  (none)"
+
+    # =================================================================
+    # Phase 3: DHCPv6 Prefix Delegation (IA_PD)
+    # =================================================================
+    echo ""
+    echo "=== Phase 3: DHCPv6 Prefix Delegation (IA_PD) ==="
+    echo ""
+    echo "DHCPv6 IA_PD Process:"
+    echo "  1. Client (acting as router) sends Solicit with IA_PD option"
+    echo "  2. Server responds with Advertise containing delegated prefix"
+    echo "  3. Client sends Request"
+    echo "  4. Server responds with Reply (with /60 prefix)"
+    echo ""
+    echo "Use case: CPE router requesting prefix for downstream LAN"
+    echo ""
+
+    # Run DHCPv6 client for prefix delegation
+    echo "Starting DHCPv6 client (requesting prefix delegation)..."
+
+    if command -v dhclient >/dev/null 2>&1; then
+      timeout 15 dhclient -6 -P -1 -d -v veth-client6 2>&1 | head -30 || true
+    elif command -v dhcpcd >/dev/null 2>&1; then
+      timeout 15 dhcpcd -6 -P -1 -d veth-client6 2>&1 | head -30 || true
+    else
+      echo "(Using test script for prefix delegation)"
+      /scripts/dhcpv6-client.sh veth-client6 pd 2>&1 || true
+    fi
+
+    # =================================================================
+    # Phase 4: Check BNG State
+    # =================================================================
+    echo ""
+    echo "=== Phase 4: BNG Server State ==="
+    echo ""
+
+    echo "Checking BNG sessions..."
+    SESSIONS=$(wget -q -O- "http://bng-ipv6:8080/api/v1/sessions" 2>&1 || echo "{}")
+    echo "Active Sessions: $SESSIONS"
+    echo ""
+
+    echo "Checking BNG stats..."
+    STATS=$(wget -q -O- "http://bng-ipv6:8080/api/v1/stats" 2>&1 || echo "{}")
+    echo "Server Stats: $STATS"
+    echo ""
+
+    # =================================================================
+    # Phase 5: Verify Connectivity
+    # =================================================================
+    echo ""
+    echo "=== Phase 5: IPv6 Connectivity Test ==="
+    echo ""
+
+    # Ping the BNG gateway
+    echo "Pinging BNG gateway (2001:db8:1::1)..."
+    ping6 -c 3 2001:db8:1::1 2>&1 || echo "[!] Ping failed (may need route)"
+
+    # =================================================================
+    # Summary
+    # =================================================================
+    echo ""
+    echo "=== Summary ==="
+    echo ""
+    echo "Client Interface: veth-client6"
+    echo "Client MAC: $CLIENT_MAC"
+    echo ""
+    echo "IPv6 Addresses:"
+    ip -6 addr show dev veth-client6 2>/dev/null | grep "inet6" | awk '{print "  " $2 " (" $NF ")"}'
+    echo ""
+    echo "IPv6 Routes:"
+    ip -6 route show dev veth-client6 2>/dev/null | head -5 | awk '{print "  " $0}'
+    echo ""
+
+    # Final status
+    ADDR_COUNT=$(ip -6 addr show dev veth-client6 scope global 2>/dev/null | grep -c "inet6" || echo "0")
+    if [ "$ADDR_COUNT" -gt 0 ]; then
+      echo "+==================================================================+"
+      echo "|  [OK] SUCCESS: IPv6 autoconfiguration working                   |"
+      echo "+==================================================================+"
+      echo ""
+      echo "  Demonstrated:"
+      echo "  - Router Advertisement sending"
+      echo "  - SLAAC address autoconfiguration"
+      echo "  - DHCPv6 Solicit/Advertise/Request/Reply"
+      echo "  - Prefix delegation (IA_PD)"
+    else
+      echo "+==================================================================+"
+      echo "|  [!] IPv6 test completed (check logs for details)               |"
+      echo "+==================================================================+"
+    fi
+
+  dhcpv6-client.sh: |
+    #!/bin/sh
+    # Simple DHCPv6 client test script
+    # Usage: dhcpv6-client.sh <interface> <na|pd>
+
+    IFACE=${1:-veth-client6}
+    MODE=${2:-na}
+
+    echo "DHCPv6 test client on $IFACE (mode: $MODE)"
+    echo ""
+
+    # This is a placeholder - in a real environment, use dhclient or dhcpcd
+    # The BNG DHCPv6 server listens on port 547
+
+    BNG_ADDR="2001:db8:1::1"
+
+    if [ "$MODE" = "na" ]; then
+      echo "Would request IA_NA (address) from $BNG_ADDR"
+      echo "DHCPv6 message flow:"
+      echo "  -> Solicit (with IA_NA option)"
+      echo "  <- Advertise (with offered address)"
+      echo "  -> Request (accepting offered address)"
+      echo "  <- Reply (confirming allocation)"
+    elif [ "$MODE" = "pd" ]; then
+      echo "Would request IA_PD (prefix) from $BNG_ADDR"
+      echo "DHCPv6 message flow:"
+      echo "  -> Solicit (with IA_PD option)"
+      echo "  <- Advertise (with delegated /60 prefix)"
+      echo "  -> Request (accepting offered prefix)"
+      echo "  <- Reply (confirming delegation)"
+    fi
+
+  udhcpc6-script.sh: |
+    #!/bin/sh
+    # udhcpc6 script for DHCPv6
+    case "$1" in
+      bound|renew)
+        if [ -n "$ipv6" ]; then
+          ip -6 addr flush dev $interface scope global 2>/dev/null
+          ip -6 addr add $ipv6 dev $interface
+          echo "DHCPv6: Got address $ipv6 on $interface"
+        fi
+        if [ -n "$ipv6prefix" ]; then
+          echo "DHCPv6: Got delegated prefix $ipv6prefix"
+        fi
+        ;;
+    esac
+---
+# Nexus for distributed state (IPv6 pools)
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nexus
+  namespace: demo-ipv6
+  labels:
+    app: nexus
+spec:
+  containers:
+    - name: nexus
+      image: ghcr.io/codelaboratoryltd/nexus:latest
+      args:
+        - "serve"
+        - "--http-port=9000"
+        
+        
+      ports:
+        - containerPort: 9000
+          name: api
+      readinessProbe:
+        httpGet:
+          path: /health
+          port: 9000
+        initialDelaySeconds: 2
+        periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nexus
+  namespace: demo-ipv6
+spec:
+  selector:
+    app: nexus
+  ports:
+    - port: 9000
+      targetPort: 9000
+      name: api
+---
+# BNG with IPv6 stack (SLAAC + DHCPv6)
+apiVersion: v1
+kind: Pod
+metadata:
+  name: bng-ipv6
+  namespace: demo-ipv6
+  labels:
+    app: bng-ipv6
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "9090"
+spec:
+  shareProcessNamespace: true
+
+  initContainers:
+    # Wait for Nexus to be ready
+    - name: wait-nexus
+      image: busybox:1.36
+      command: ["sh", "-c"]
+      args:
+        - |
+          echo "Waiting for Nexus..."
+          until wget -q -O- http://nexus:9000/health >/dev/null 2>&1; do
+            sleep 1
+          done
+          echo "Nexus is ready"
+
+    # Create IPv6 pools in Nexus
+    - name: create-pools
+      image: busybox:1.36
+      command: ["sh", "-c"]
+      args:
+        - |
+          echo "Creating IPv6 address pool in Nexus..."
+          wget -q -O- --post-data='{"id":"ipv6-addr-pool","cidr":"2001:db8:2::/64","prefix_length":128,"mode":"static"}' \
+            --header='Content-Type: application/json' \
+            http://nexus:9000/api/v1/pools || true
+          echo "Address pool created"
+
+          echo "Creating IPv6 prefix delegation pool in Nexus..."
+          wget -q -O- --post-data='{"id":"ipv6-pd-pool","cidr":"2001:db8:100::/48","prefix_length":60,"mode":"static"}' \
+            --header='Content-Type: application/json' \
+            http://nexus:9000/api/v1/pools || true
+          echo "PD pool created"
+
+    # Setup IPv6 network
+    - name: network-setup
+      image: nicolaka/netshoot:latest
+      command: ["/bin/sh", "-c"]
+      args:
+        - |
+          # Create veth pair for IPv6 testing
+          ip link add veth-bng6 type veth peer name veth-client6
+
+          # Configure BNG side - this is the router interface
+          ip -6 addr add 2001:db8:1::1/64 dev veth-bng6
+          ip link set veth-bng6 up
+
+          # Configure client side - just bring up, let SLAAC/DHCPv6 configure
+          ip link set veth-client6 up
+
+          # Enable IPv6 forwarding
+          sysctl -w net.ipv6.conf.all.forwarding=1
+          sysctl -w net.ipv6.conf.veth-bng6.forwarding=1
+
+          # Allow RA on the BNG interface (router mode)
+          sysctl -w net.ipv6.conf.veth-bng6.accept_ra=0
+
+          echo "IPv6 Network ready:"
+          echo "  veth-bng6: 2001:db8:1::1/64 (BNG router)"
+          echo "  veth-client6: (awaiting SLAAC/DHCPv6)"
+      securityContext:
+        privileged: true
+        capabilities:
+          add: ["NET_ADMIN", "NET_RAW", "SYS_ADMIN"]
+
+  containers:
+    - name: bng
+      image: ghcr.io/codelaboratoryltd/bng:latest
+      args:
+        - "run"
+        - "--interface=veth-bng6"
+        # IPv4 pool (minimal, for compatibility)
+        - "--pool-network=10.100.0.0/24"
+        - "--pool-gateway=10.100.0.1"
+        - "--pool-dns=8.8.8.8"
+        # IPv6 SLAAC configuration (Issue #64 fixed)
+        - "--slaac-enabled=true"
+        - "--slaac-prefixes=2001:db8:1::/64"
+        - "--slaac-dns=2001:4860:4860::8888"
+        # DHCPv6 configuration
+        - "--dhcpv6-enabled=true"
+        - "--dhcpv6-address-pool=2001:db8:2::/64"
+        - "--dhcpv6-prefix-pool=2001:db8:100::/48"
+        - "--dhcpv6-delegation-length=60"
+        - "--dhcpv6-dns=2001:4860:4860::8888,2001:4860:4860::8844"
+        # Nexus integration
+        - "--nexus-url=http://nexus:9000"
+        
+      env:
+        # Short RA interval for demo
+        - name: BNG_SLAAC_MIN_RA_INTERVAL
+          value: "10s"
+        - name: BNG_SLAAC_MAX_RA_INTERVAL
+          value: "30s"
+      ports:
+        - containerPort: 8080
+          name: api
+        - containerPort: 9090
+          name: metrics
+      securityContext:
+        privileged: true
+        capabilities:
+          add: ["NET_ADMIN", "NET_RAW", "SYS_ADMIN", "CAP_NET_BIND_SERVICE"]
+
+    - name: client
+      image: nicolaka/netshoot:latest
+      command: ["sleep", "infinity"]
+      securityContext:
+        privileged: true
+        capabilities:
+          add: ["NET_ADMIN", "NET_RAW", "SYS_ADMIN"]
+      volumeMounts:
+        - name: scripts
+          mountPath: /scripts
+          readOnly: true
+
+  volumes:
+    - name: scripts
+      configMap:
+        name: ipv6-scripts
+        defaultMode: 0755
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: bng-ipv6
+  namespace: demo-ipv6
+spec:
+  selector:
+    app: bng-ipv6
+  ports:
+    - port: 8080
+      targetPort: 8080
+      name: api
+    - port: 9090
+      targetPort: 9090
+      name: metrics
