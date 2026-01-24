@@ -43,6 +43,10 @@ spec:
     metadata:
       labels:
         app: nexus
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9002"
+        prometheus.io/path: "/metrics"
     spec:
       containers:
         - name: nexus
@@ -50,9 +54,12 @@ spec:
           args:
             - "serve"
             - "--http-port=9000"
+            - "--metrics-port=9002"
           ports:
             - containerPort: 9000
               name: api
+            - containerPort: 9002
+              name: metrics
           readinessProbe:
             httpGet:
               path: /api/v1/pools

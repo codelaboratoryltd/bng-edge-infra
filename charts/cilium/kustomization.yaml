@@ -1,0 +1,31 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - templates/cilium-agent/clusterrole.yaml
+  - templates/cilium-agent/clusterrolebinding.yaml
+  - templates/cilium-agent/daemonset.yaml
+  - templates/cilium-agent/role.yaml
+  - templates/cilium-agent/rolebinding.yaml
+  - templates/cilium-agent/service.yaml
+  - templates/cilium-agent/serviceaccount.yaml
+  - templates/cilium-agent/servicemonitor.yaml
+  - templates/cilium-ca-secret.yaml
+  - templates/cilium-configmap.yaml
+  - templates/cilium-operator/clusterrole.yaml
+  - templates/cilium-operator/clusterrolebinding.yaml
+  - templates/cilium-operator/deployment.yaml
+  - templates/cilium-operator/serviceaccount.yaml
+  - templates/hubble-relay/configmap.yaml
+  - templates/hubble-relay/deployment.yaml
+  - templates/hubble-relay/service.yaml
+  - templates/hubble-relay/serviceaccount.yaml
+  - templates/hubble-ui/clusterrole.yaml
+  - templates/hubble-ui/clusterrolebinding.yaml
+  - templates/hubble-ui/configmap.yaml
+  - templates/hubble-ui/deployment.yaml
+  - templates/hubble-ui/service.yaml
+  - templates/hubble-ui/serviceaccount.yaml
+  - templates/hubble/metrics-service.yaml
+  - templates/hubble/peer-service.yaml
+  - templates/hubble/tls-helm/relay-client-secret.yaml
+  - templates/hubble/tls-helm/server-secret.yaml

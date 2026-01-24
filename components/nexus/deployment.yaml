@@ -35,6 +35,10 @@ spec:
     metadata:
       labels:
         app: nexus
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9002"
+        prometheus.io/path: "/metrics"
     spec:
       containers:
         - name: nexus
