@@ -122,73 +122,142 @@ data:
 
   run-wgar-test.sh: |
     #!/bin/sh
-    # BNG + Nexus Integration Test
-    # Demonstrates: Real DHCP → BNG → Nexus allocation flow
+    # Walled Garden → Activation → Production IP Test
     #
-    # Note: True walled garden (unknown→local, known→Nexus) requires
-    # additional BNG logic. This test verifies the Nexus integration.
-    set -e
+    # Flow:
+    #   1. Unknown subscriber → Walled Garden IP (10.255.x.x)
+    #   2. Activate subscriber (create Nexus allocation)
+    #   3. Wait for lease expiry
+    #   4. Subscriber renews → Production IP (10.200.x.x)
 
     NEXUS_URL="${NEXUS_URL:-http://nexus:9000}"
+    LEASE_TIME=30  # Must match BNG --lease-time
 
     echo "╔══════════════════════════════════════════════════════════════╗"
-    echo "║        BNG + Nexus Integration Test                          ║"
+    echo "║     Walled Garden → Activation → Production IP Test          ║"
     echo "╚══════════════════════════════════════════════════════════════╝"
     echo ""
 
     # Get client MAC
     CLIENT_MAC=$(cat /sys/class/net/veth-client/address)
     echo "Client MAC: $CLIENT_MAC"
+    echo "Lease Time: ${LEASE_TIME}s"
     echo ""
 
-    # Phase 1: Get IP via DHCP (BNG allocates from Nexus)
-    echo "═══ Phase 1: DHCP Request ═══"
-    echo "Requesting IP via DHCP (BNG will allocate from Nexus)..."
+    # =================================================================
+    # Phase 1: Unknown Subscriber → Walled Garden IP
+    # =================================================================
+    echo "═══ Phase 1: Unknown Subscriber (Walled Garden) ═══"
+    echo "Client has no Nexus allocation - should get walled garden IP..."
+    echo ""
 
     ip addr flush dev veth-client 2>/dev/null || true
     timeout 15 udhcpc -i veth-client -n -q -t 5 -T 3 -f -s /scripts/udhcpc-script.sh 2>&1 || true
 
-    FIRST_IP=$(ip addr show veth-client 2>/dev/null | grep "inet " | head -1 | awk '{print $2}' | cut -d/ -f1)
+    WGAR_IP=$(ip addr show veth-client 2>/dev/null | grep "inet " | head -1 | awk '{print $2}' | cut -d/ -f1)
     echo ""
-    echo "Allocated IP: $FIRST_IP"
+    echo "Walled Garden IP: $WGAR_IP"
 
-    case "$FIRST_IP" in
-      10.200.*)
-        echo "✓ PASS: Got IP from Nexus pool (10.200.x.x)"
-        ;;
+    PHASE1_PASS=false
+    case "$WGAR_IP" in
       10.255.*)
-        echo "! INFO: Got IP from local pool (10.255.x.x) - walled garden mode"
+        echo "✓ PASS: Got walled garden IP (10.255.x.x)"
+        PHASE1_PASS=true
+        ;;
+      10.200.*)
+        echo "✗ FAIL: Got production IP - subscriber should not be activated yet!"
         ;;
       *)
-        echo "? UNEXPECTED: Got $FIRST_IP"
+        echo "? UNEXPECTED: Got $WGAR_IP"
         ;;
     esac
     echo ""
 
-    # Phase 2: Verify Nexus allocation
-    echo "═══ Phase 2: Verify Nexus State ═══"
-    echo "Checking Nexus for allocation..."
-
-    # Use wget instead of curl (available in Alpine)
-    wget -q -O- "$NEXUS_URL/api/v1/allocations?pool_id=prod" 2>&1 | head -200 || echo "Could not query Nexus"
+    # =================================================================
+    # Phase 2: Activate Subscriber (Create Nexus Allocation)
+    # =================================================================
+    echo "═══ Phase 2: Activate Subscriber ═══"
+    echo "Creating allocation in Nexus for MAC $CLIENT_MAC..."
     echo ""
 
+    # Create allocation in Nexus (simulates RADIUS authentication / activation)
+    wget -q -O- --post-data="{\"pool_id\":\"prod\",\"subscriber_id\":\"$CLIENT_MAC\"}" \
+      --header="Content-Type: application/json" \
+      "$NEXUS_URL/api/v1/allocations" 2>&1 || echo "Allocation may already exist"
+
+    echo ""
+    echo "Verifying Nexus allocation..."
+    wget -q -O- "$NEXUS_URL/api/v1/allocations/$CLIENT_MAC" 2>&1 || echo "Could not verify"
+    echo ""
+
+    # =================================================================
+    # Phase 3: Wait for Lease Expiry
+    # =================================================================
+    echo "═══ Phase 3: Waiting for Lease Expiry ═══"
+    echo "Waiting ${LEASE_TIME}s for walled garden lease to expire..."
+    echo ""
+
+    # Progress indicator
+    for i in $(seq 1 $LEASE_TIME); do
+      printf "."
+      sleep 1
+    done
+    echo ""
+    echo "Lease expired."
+    echo ""
+
+    # =================================================================
+    # Phase 4: Renewed Subscriber → Production IP
+    # =================================================================
+    echo "═══ Phase 4: Activated Subscriber (Production IP) ═══"
+    echo "Client now has Nexus allocation - should get production IP..."
+    echo ""
+
+    ip addr flush dev veth-client 2>/dev/null || true
+    timeout 15 udhcpc -i veth-client -n -q -t 5 -T 3 -f -s /scripts/udhcpc-script.sh 2>&1 || true
+
+    PROD_IP=$(ip addr show veth-client 2>/dev/null | grep "inet " | head -1 | awk '{print $2}' | cut -d/ -f1)
+    echo ""
+    echo "Production IP: $PROD_IP"
+
+    PHASE4_PASS=false
+    case "$PROD_IP" in
+      10.200.*)
+        echo "✓ PASS: Got production IP from Nexus (10.200.x.x)"
+        PHASE4_PASS=true
+        ;;
+      10.255.*)
+        echo "✗ FAIL: Still getting walled garden IP"
+        ;;
+      *)
+        echo "? UNEXPECTED: Got $PROD_IP"
+        ;;
+    esac
+    echo ""
+
+    # =================================================================
     # Summary
+    # =================================================================
     echo "═══ Summary ═══"
-    echo "Allocated IP: $FIRST_IP"
-    if echo "$FIRST_IP" | grep -q "^10\.200\."; then
+    echo "Phase 1 (Walled Garden): $WGAR_IP"
+    echo "Phase 4 (Production):    $PROD_IP"
+    echo ""
+
+    if [ "$PHASE1_PASS" = "true" ] && [ "$PHASE4_PASS" = "true" ]; then
+      echo "╔══════════════════════════════════════════════════════════════╗"
+      echo "║  ✓ SUCCESS: Full Walled Garden → Production Flow Verified!   ║"
+      echo "╚══════════════════════════════════════════════════════════════╝"
       echo ""
-      echo "✓ SUCCESS: BNG + Nexus integration verified!"
-      echo "  - DHCP DISCOVER received by BNG (slow path)"
-      echo "  - IP allocated from Nexus pool"
-      echo "  - DHCP REQUEST accepted (Nexus IP validation)"
-      echo "  - DHCP ACK sent with Nexus-allocated IP"
-      echo "  - Allocation recorded in Nexus"
-      echo ""
-      echo "Note: Subsequent requests use eBPF fast path (kernel-level)."
+      echo "  1. Unknown subscriber got walled garden IP (10.255.x.x)"
+      echo "  2. Subscriber activated (Nexus allocation created)"
+      echo "  3. Lease expired"
+      echo "  4. Activated subscriber got production IP (10.200.x.x)"
+      exit 0
     else
-      echo ""
-      echo "! Check BNG and Nexus logs for details"
+      echo "╔══════════════════════════════════════════════════════════════╗"
+      echo "║  ✗ FAILED: Check BNG and Nexus logs for details              ║"
+      echo "╚══════════════════════════════════════════════════════════════╝"
+      exit 1
     fi
 
   udhcpc-script.sh: |
@@ -254,7 +323,7 @@ spec:
         - "--pool-dns=8.8.8.8"
         - "--nexus-url=http://nexus:9000"
         - "--nexus-pool=prod"
-        - "--lease-time=5m"
+        - "--lease-time=30s"
         - "--log-level=debug"
       securityContext:
         privileged: true
