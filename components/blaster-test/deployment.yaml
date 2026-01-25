@@ -167,7 +167,7 @@ spec:
         - "--pool-gateway=10.100.0.1"
         - "--pool-dns=8.8.8.8"
         - "--lease-time=1h"
-        - "--log-level=debug"
+        
       securityContext:
         privileged: true
         capabilities:

@@ -1172,7 +1172,7 @@ if selected_demo == 'all' or selected_demo == 'wifi':
     k8s_yaml(kustomize('components/wifi-test'))
 
     k8s_resource(
-        'nexus',
+        'nexus:pod:demo-wifi',
         new_name='nexus:wifi',
         labels=['wifi-test'],
     )
@@ -1766,14 +1766,14 @@ if selected_demo == 'all' or selected_demo == 'failure':
     )
 
     k8s_resource(
-        'bng-active',
+        'bng-active:pod:demo-failure',
         new_name='bng-failure-active',
         labels=['failure-test'],
         resource_deps=['nexus-failure-cluster'],
     )
 
     k8s_resource(
-        'bng-standby',
+        'bng-standby:pod:demo-failure',
         new_name='bng-failure-standby',
         labels=['failure-test'],
         resource_deps=['bng-failure-active'],
