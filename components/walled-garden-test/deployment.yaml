@@ -324,7 +324,7 @@ spec:
         - "--nexus-url=http://nexus:9000"
         - "--nexus-pool=prod"
         - "--lease-time=30s"
-        - "--log-level=debug"
+        
       securityContext:
         privileged: true
         capabilities:
