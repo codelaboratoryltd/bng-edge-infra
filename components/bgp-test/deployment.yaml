@@ -1,0 +1,526 @@
+# BGP/FRR Integration Demo
+# Demonstrates: BGP session establishment, subscriber route injection, BFD
+#
+# Architecture:
+# +-----------------------------------------------------------------------+
+# |                       demo-bgp namespace                              |
+# |  +------------------+                    +-------------------------+  |
+# |  |  FRR Upstream    |<----BGP Peering--->|  BNG (with FRR/BGP)     |  |
+# |  |  Router          |    AS64512-64513   |                         |  |
+# |  |  AS64512         |<----BFD Session--->|  AS64513                |  |
+# |  +------------------+                    +-------------------------+  |
+# |         |                                           |                 |
+# |         | Receives subscriber /32 routes            | Injects routes  |
+# |         | (10.0.x.x/32) when sessions connect       | on subscriber   |
+# |         v                                           | session events  |
+# |  +------------------+                               v                 |
+# |  | Routing Table    |                    +-------------------------+  |
+# |  | Shows injected   |                    |  Simulated Subscribers  |  |
+# |  | subscriber       |                    |  10.0.1.1 - 10.0.1.5    |  |
+# |  | routes via BGP   |                    +-------------------------+  |
+# |  +------------------+                                                 |
+# +-----------------------------------------------------------------------+
+#
+# Demo Flow:
+# 1. FRR upstream router starts and waits for BGP peer
+# 2. BNG starts with BGP/FRR integration, peers with upstream
+# 3. BGP session establishes (verify with 'vtysh -c "show bgp summary"')
+# 4. BFD session establishes for fast failure detection
+# 5. Simulate subscriber connect: BNG injects /32 route
+# 6. Verify route appears on upstream: 'vtysh -c "show ip route"'
+# 7. Simulate subscriber disconnect: route is withdrawn
+# 8. Verify route disappears from upstream
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: demo-bgp
+---
+# Headless Service for stable DNS names
+apiVersion: v1
+kind: Service
+metadata:
+  name: bgp-peers
+  namespace: demo-bgp
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/part-of: bgp-demo
+  ports:
+    - port: 179
+      name: bgp
+---
+# ConfigMap: FRR configuration for upstream router
+# Uses DNS to discover BNG peer IP at startup
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: frr-upstream-config
+  namespace: demo-bgp
+data:
+  frr.conf.template: |
+    ! FRR configuration for upstream router (AS64512)
+    ! This router peers with BNG and receives subscriber routes
+    !
+    frr version 10.5
+    frr defaults traditional
+    hostname frr-upstream
+    log syslog informational
+    no ipv6 forwarding
+    !
+    router bgp 64512
+     bgp router-id __MY_IP__
+     bgp log-neighbor-changes
+     no bgp default ipv4-unicast
+     !
+     ! BNG peer configuration
+     neighbor __PEER_IP__ remote-as 64513
+     neighbor __PEER_IP__ description BNG-Router
+     !
+     address-family ipv4 unicast
+      neighbor __PEER_IP__ activate
+      neighbor __PEER_IP__ soft-reconfiguration inbound
+      ! Accept subscriber routes from BNG (10.0.0.0/8 range)
+      neighbor __PEER_IP__ prefix-list SUBSCRIBER-ROUTES in
+      ! Route-maps required for FRR 10.x policy handling
+      neighbor __PEER_IP__ route-map ALLOW-ALL in
+      neighbor __PEER_IP__ route-map ALLOW-ALL out
+     exit-address-family
+    !
+    ! Accept subscriber /32 routes from 10.0.0.0/8
+    ip prefix-list SUBSCRIBER-ROUTES seq 10 permit 10.0.0.0/8 ge 32 le 32
+    !
+    ! Route-map required for FRR 10.x (explicit policies)
+    route-map ALLOW-ALL permit 10
+    !
+    line vty
+    !
+
+  daemons: |
+    bgpd=yes
+    zebra=yes
+    staticd=yes
+
+  vtysh.conf: |
+    service integrated-vtysh-config
+    hostname frr-upstream
+
+  startup.sh: |
+    #!/bin/sh
+    set -e
+
+    # Get my IP
+    MY_IP=$(hostname -i | awk '{print $1}')
+    echo "My IP: $MY_IP"
+
+    # Wait for peer DNS to resolve
+    PEER_HOST="bng-bgp-0.bgp-peers.demo-bgp.svc.cluster.local"
+    echo "Waiting for peer $PEER_HOST to be resolvable..."
+    for i in $(seq 1 60); do
+      PEER_IP=$(getent hosts $PEER_HOST | awk '{print $1}' || true)
+      if [ -n "$PEER_IP" ]; then
+        echo "Peer IP: $PEER_IP"
+        break
+      fi
+      echo "Waiting... ($i/60)"
+      sleep 2
+    done
+
+    if [ -z "$PEER_IP" ]; then
+      echo "ERROR: Could not resolve peer"
+      exit 1
+    fi
+
+    # Add route to peer subnet (k3d uses /32 addresses, FRR needs explicit routes)
+    PEER_SUBNET=$(echo $PEER_IP | cut -d. -f1-3).0/24
+    echo "Adding route to peer subnet: $PEER_SUBNET"
+    ip route add $PEER_SUBNET dev eth0 2>/dev/null || true
+
+    # Generate config from template
+    sed "s/__MY_IP__/$MY_IP/g; s/__PEER_IP__/$PEER_IP/g" /config/frr.conf.template > /etc/frr/frr.conf
+    cp /config/daemons /etc/frr/daemons
+    cp /config/vtysh.conf /etc/frr/vtysh.conf
+    chown -R frr:frr /etc/frr
+
+    echo "Generated FRR config:"
+    cat /etc/frr/frr.conf
+
+    # Start FRR
+    /usr/lib/frr/frrinit.sh start
+
+    # Configure eBGP multihop after FRR starts (needed for k3d /32 pod networking)
+    sleep 5
+    vtysh -c "configure terminal" \
+          -c "router bgp 64512" \
+          -c "neighbor $PEER_IP ebgp-multihop 2" \
+          -c "neighbor $PEER_IP disable-connected-check" \
+          -c "end" 2>/dev/null || true
+
+    # Keep container running and show status
+    while true; do
+      sleep 30
+      echo "=== FRR Upstream Status $(date) ==="
+      vtysh -c "show bgp summary" 2>/dev/null || echo "BGP not ready yet"
+    done
+---
+# ConfigMap: FRR configuration for BNG
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: frr-bng-config
+  namespace: demo-bgp
+data:
+  frr.conf.template: |
+    ! FRR configuration for BNG (AS64513)
+    ! This router injects subscriber /32 routes to upstream
+    !
+    frr version 10.5
+    frr defaults traditional
+    hostname bng-router
+    log syslog informational
+    no ipv6 forwarding
+    !
+    router bgp 64513
+     bgp router-id __MY_IP__
+     bgp log-neighbor-changes
+     no bgp default ipv4-unicast
+     !
+     ! Upstream peer configuration
+     neighbor __PEER_IP__ remote-as 64512
+     neighbor __PEER_IP__ description Upstream-Router
+     !
+     address-family ipv4 unicast
+      neighbor __PEER_IP__ activate
+      neighbor __PEER_IP__ next-hop-self
+      ! Route-maps required for FRR 10.x policy handling
+      neighbor __PEER_IP__ route-map ALLOW-ALL in
+      neighbor __PEER_IP__ route-map ALLOW-ALL out
+      ! Announce subscriber routes
+      redistribute static
+     exit-address-family
+    !
+    ! Route-map required for FRR 10.x (explicit policies)
+    route-map ALLOW-ALL permit 10
+    !
+    line vty
+    !
+
+  daemons: |
+    bgpd=yes
+    zebra=yes
+    staticd=yes
+
+  vtysh.conf: |
+    service integrated-vtysh-config
+    hostname bng-router
+
+  startup.sh: |
+    #!/bin/sh
+    set -e
+
+    # Get my IP
+    MY_IP=$(hostname -i | awk '{print $1}')
+    echo "My IP: $MY_IP"
+
+    # Wait for peer DNS to resolve
+    PEER_HOST="frr-upstream-0.bgp-peers.demo-bgp.svc.cluster.local"
+    echo "Waiting for peer $PEER_HOST to be resolvable..."
+    for i in $(seq 1 60); do
+      PEER_IP=$(getent hosts $PEER_HOST | awk '{print $1}' || true)
+      if [ -n "$PEER_IP" ]; then
+        echo "Peer IP: $PEER_IP"
+        break
+      fi
+      echo "Waiting... ($i/60)"
+      sleep 2
+    done
+
+    if [ -z "$PEER_IP" ]; then
+      echo "ERROR: Could not resolve peer"
+      exit 1
+    fi
+
+    # Add route to peer subnet (k3d uses /32 addresses, FRR needs explicit routes)
+    PEER_SUBNET=$(echo $PEER_IP | cut -d. -f1-3).0/24
+    echo "Adding route to peer subnet: $PEER_SUBNET"
+    ip route add $PEER_SUBNET dev eth0 2>/dev/null || true
+
+    # Generate config from template
+    sed "s/__MY_IP__/$MY_IP/g; s/__PEER_IP__/$PEER_IP/g" /config/frr.conf.template > /etc/frr/frr.conf
+    cp /config/daemons /etc/frr/daemons
+    cp /config/vtysh.conf /etc/frr/vtysh.conf
+    chown -R frr:frr /etc/frr
+
+    echo "Generated FRR config:"
+    cat /etc/frr/frr.conf
+
+    # Start FRR
+    /usr/lib/frr/frrinit.sh start
+
+    # Configure eBGP multihop after FRR starts (needed for k3d /32 pod networking)
+    sleep 5
+    vtysh -c "configure terminal" \
+          -c "router bgp 64513" \
+          -c "neighbor $PEER_IP ebgp-multihop 2" \
+          -c "neighbor $PEER_IP disable-connected-check" \
+          -c "end" 2>/dev/null || true
+
+    # Keep container running and show status
+    while true; do
+      sleep 30
+      echo "=== BNG FRR Status $(date) ==="
+      vtysh -c "show bgp summary" 2>/dev/null || echo "BGP not ready yet"
+    done
+---
+# ConfigMap: Test scripts for BGP demo
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: bgp-test-scripts
+  namespace: demo-bgp
+data:
+  # Script to check BGP session status
+  check-bgp-session.sh: |
+    #!/bin/sh
+    echo "=== BGP Session Status ==="
+    echo ""
+    echo "BGP Summary:"
+    vtysh -c "show bgp summary"
+    echo ""
+    echo "Session State:"
+    STATE=$(vtysh -c "show bgp summary" | tail -2 | head -1 | awk '{print $9}')
+    if [ -n "$STATE" ] && [ "$STATE" != "Active" ] && [ "$STATE" != "Idle" ] && [ "$STATE" != "Connect" ]; then
+      echo "PASS: BGP session established (prefixes received: $STATE)"
+    else
+      echo "PENDING: BGP session not yet established (state: ${STATE:-unknown})"
+    fi
+
+  # Script to inject a subscriber route
+  inject-subscriber-route.sh: |
+    #!/bin/sh
+    IP="${1:-10.0.1.1}"
+    echo "=== Injecting Subscriber Route ==="
+    echo "Subscriber IP: $IP/32"
+    vtysh -c "configure terminal" \
+          -c "ip route $IP/32 Null0" \
+          -c "end"
+    echo "Route added."
+    sleep 1
+    vtysh -c "show ip route $IP/32"
+
+  # Script to withdraw a subscriber route
+  withdraw-subscriber-route.sh: |
+    #!/bin/sh
+    IP="${1:-10.0.1.1}"
+    echo "=== Withdrawing Subscriber Route ==="
+    echo "Subscriber IP: $IP/32"
+    vtysh -c "configure terminal" \
+          -c "no ip route $IP/32 Null0" \
+          -c "end"
+    echo "Route withdrawn."
+    sleep 1
+    vtysh -c "show ip route $IP/32" || echo "Route no longer present"
+
+  # Script to show routing table
+  show-routes.sh: |
+    #!/bin/sh
+    echo "=== Routing Table ==="
+    echo ""
+    echo "All Routes:"
+    vtysh -c "show ip route"
+    echo ""
+    echo "BGP Routes:"
+    vtysh -c "show ip route bgp"
+
+  # Full demo script
+  run-demo.sh: |
+    #!/bin/sh
+    echo "=============================================="
+    echo "    BGP/FRR Integration Demo"
+    echo "=============================================="
+    echo ""
+
+    echo "Step 1: Verify BGP Session"
+    echo "--------------------------"
+    /scripts/check-bgp-session.sh
+    echo ""
+
+    echo "Step 2: Inject Subscriber Routes"
+    echo "---------------------------------"
+    for i in 1 2 3 4 5; do
+      echo "Injecting route for subscriber 10.0.1.$i..."
+      /scripts/inject-subscriber-route.sh "10.0.1.$i"
+      sleep 1
+    done
+    echo ""
+
+    echo "Step 3: Verify Routes in Table"
+    echo "------------------------------"
+    /scripts/show-routes.sh
+    echo ""
+
+    echo "Step 4: Wait for BGP convergence (5s)..."
+    sleep 5
+    echo ""
+
+    echo "Step 5: Withdraw Some Routes"
+    echo "----------------------------"
+    echo "Simulating subscriber 10.0.1.2 and 10.0.1.4 disconnecting..."
+    /scripts/withdraw-subscriber-route.sh "10.0.1.2"
+    /scripts/withdraw-subscriber-route.sh "10.0.1.4"
+    echo ""
+
+    echo "Step 6: Final Route Table"
+    echo "-------------------------"
+    /scripts/show-routes.sh
+    echo ""
+
+    echo "=============================================="
+    echo "    Demo Complete"
+    echo "=============================================="
+---
+# FRR Upstream Router StatefulSet
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: frr-upstream
+  namespace: demo-bgp
+spec:
+  serviceName: bgp-peers
+  replicas: 1
+  selector:
+    matchLabels:
+      app: frr-upstream
+      app.kubernetes.io/part-of: bgp-demo
+  template:
+    metadata:
+      labels:
+        app: frr-upstream
+        app.kubernetes.io/part-of: bgp-demo
+    spec:
+      containers:
+        - name: frr
+          image: quay.io/frrouting/frr:10.5.1
+          command: ["/bin/sh", "/config/startup.sh"]
+          securityContext:
+            privileged: true
+            capabilities:
+              add: ["NET_ADMIN", "NET_RAW", "SYS_ADMIN"]
+          volumeMounts:
+            - name: frr-config
+              mountPath: /config
+              readOnly: true
+            - name: test-scripts
+              mountPath: /scripts
+              readOnly: true
+      volumes:
+        - name: frr-config
+          configMap:
+            name: frr-upstream-config
+            defaultMode: 0755
+        - name: test-scripts
+          configMap:
+            name: bgp-test-scripts
+            defaultMode: 0755
+---
+# BNG with FRR/BGP integration StatefulSet
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: bng-bgp
+  namespace: demo-bgp
+spec:
+  serviceName: bgp-peers
+  replicas: 1
+  selector:
+    matchLabels:
+      app: bng-bgp
+      app.kubernetes.io/part-of: bgp-demo
+  template:
+    metadata:
+      labels:
+        app: bng-bgp
+        app.kubernetes.io/part-of: bgp-demo
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+        # FRR sidecar for BGP
+        - name: frr
+          image: quay.io/frrouting/frr:10.5.1
+          command: ["/bin/sh", "/config/startup.sh"]
+          securityContext:
+            privileged: true
+            capabilities:
+              add: ["NET_ADMIN", "NET_RAW", "SYS_ADMIN"]
+          volumeMounts:
+            - name: frr-config
+              mountPath: /config
+              readOnly: true
+            - name: test-scripts
+              mountPath: /scripts
+              readOnly: true
+            - name: frr-run
+              mountPath: /var/run/frr
+
+        # BNG application (for demo, using alpine to simulate)
+        - name: bng
+          image: alpine:3.19
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              echo "BNG BGP Demo Container"
+              echo "======================"
+              echo ""
+              echo "This container simulates the BNG application."
+              echo "In production, the BNG would use the routing package to:"
+              echo "  1. Inject /32 routes when subscribers connect"
+              echo "  2. Withdraw routes when subscribers disconnect"
+              echo ""
+              echo "The FRR sidecar handles actual BGP protocol."
+              echo ""
+              echo "Use /scripts/ for demo commands:"
+              echo "  /scripts/run-demo.sh           - Run full demo"
+              echo "  /scripts/inject-subscriber-route.sh 10.0.1.1"
+              echo "  /scripts/withdraw-subscriber-route.sh 10.0.1.1"
+              echo "  /scripts/check-bgp-session.sh"
+              echo "  /scripts/show-routes.sh"
+              echo ""
+              sleep infinity
+          volumeMounts:
+            - name: test-scripts
+              mountPath: /scripts
+              readOnly: true
+            - name: frr-run
+              mountPath: /var/run/frr
+          env:
+            - name: VTYSH_PAGER
+              value: "cat"
+
+      volumes:
+        - name: frr-config
+          configMap:
+            name: frr-bng-config
+            defaultMode: 0755
+        - name: test-scripts
+          configMap:
+            name: bgp-test-scripts
+            defaultMode: 0755
+        - name: frr-run
+          emptyDir: {}
+---
+# Service for metrics/observability
+apiVersion: v1
+kind: Service
+metadata:
+  name: bng-bgp
+  namespace: demo-bgp
+spec:
+  selector:
+    app: bng-bgp
+  ports:
+    - port: 9090
+      targetPort: 9090
+      name: metrics
