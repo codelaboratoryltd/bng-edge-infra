@@ -1,0 +1,250 @@
+# Prometheus alert rules for BNG Edge Infrastructure
+# Issue #10: Alert rules for common issues
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: bng-edge-alerts
+  namespace: monitoring
+  labels:
+    app: prometheus
+    role: alert-rules
+spec:
+  groups:
+    - name: bng.rules
+      interval: 30s
+      rules:
+        # BNG Health Alerts
+        - alert: BNGDown
+          expr: up{job="bng"} == 0
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "BNG instance {{ $labels.instance }} is down"
+            description: "BNG instance {{ $labels.instance }} has been unreachable for more than 1 minute."
+            runbook_url: "https://docs.example.com/runbooks/bng-down"
+
+        - alert: BNGHighCPU
+          expr: rate(process_cpu_seconds_total{job="bng"}[5m]) * 100 > 80
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "BNG {{ $labels.instance }} CPU usage is high"
+            description: "BNG instance {{ $labels.instance }} CPU usage has been above 80% for 5 minutes. Current: {{ $value | printf \"%.1f\" }}%"
+
+        - alert: BNGHighMemory
+          expr: (process_resident_memory_bytes{job="bng"} / 1024 / 1024 / 1024) > 4
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "BNG {{ $labels.instance }} memory usage is high"
+            description: "BNG instance {{ $labels.instance }} is using more than 4GB of memory. Current: {{ $value | printf \"%.2f\" }}GB"
+
+        # DHCP Performance Alerts
+        - alert: DHCPHighLatency
+          expr: histogram_quantile(0.99, rate(dhcp_request_duration_seconds_bucket{job="bng"}[5m])) > 0.01
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "DHCP P99 latency is high on {{ $labels.instance }}"
+            description: "DHCP P99 latency on {{ $labels.instance }} is above 10ms (slow path threshold). Current: {{ $value | printf \"%.3f\" }}s"
+
+        - alert: DHCPFastPathLatencyHigh
+          expr: histogram_quantile(0.99, rate(dhcp_fast_path_duration_seconds_bucket{job="bng"}[5m])) > 0.0001
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "DHCP fast path P99 latency is high on {{ $labels.instance }}"
+            description: "DHCP fast path P99 latency on {{ $labels.instance }} is above 100us. Current: {{ $value | printf \"%.6f\" }}s"
+
+        - alert: DHCPCacheHitRateLow
+          expr: rate(dhcp_cache_hits_total{job="bng"}[5m]) / (rate(dhcp_cache_hits_total{job="bng"}[5m]) + rate(dhcp_cache_misses_total{job="bng"}[5m])) < 0.95
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "DHCP cache hit rate is low on {{ $labels.instance }}"
+            description: "DHCP cache hit rate on {{ $labels.instance }} is below 95%. Current: {{ $value | printf \"%.1f\" }}%"
+
+        - alert: DHCPErrorRateHigh
+          expr: rate(dhcp_errors_total{job="bng"}[5m]) / rate(dhcp_requests_total{job="bng"}[5m]) > 0.01
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "DHCP error rate is high on {{ $labels.instance }}"
+            description: "DHCP error rate on {{ $labels.instance }} is above 1%. Current: {{ $value | printf \"%.2f\" }}%"
+
+        # IP Pool Alerts
+        - alert: IPPoolExhausted
+          expr: ip_pool_available_addresses{job="bng"} < 100
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "IP pool {{ $labels.pool }} is nearly exhausted"
+            description: "IP pool {{ $labels.pool }} has fewer than 100 available addresses. Current: {{ $value }}"
+
+        - alert: IPPoolUtilizationHigh
+          expr: (ip_pool_allocated_addresses{job="bng"} / ip_pool_total_addresses{job="bng"}) > 0.9
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "IP pool {{ $labels.pool }} utilization is high"
+            description: "IP pool {{ $labels.pool }} utilization is above 90%. Current: {{ $value | printf \"%.1f\" }}%"
+
+        # Subscriber Session Alerts
+        - alert: SubscriberSessionsHigh
+          expr: bng_active_sessions{job="bng"} > 1800
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "High subscriber count on {{ $labels.instance }}"
+            description: "BNG instance {{ $labels.instance }} has more than 1800 active subscribers (approaching 2000 limit). Current: {{ $value }}"
+
+        - alert: SessionCreationRateHigh
+          expr: rate(bng_sessions_created_total{job="bng"}[5m]) > 100
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "High session creation rate on {{ $labels.instance }}"
+            description: "Session creation rate on {{ $labels.instance }} is above 100/s. This may indicate a network event. Current: {{ $value | printf \"%.1f\" }}/s"
+
+    - name: nexus.rules
+      interval: 30s
+      rules:
+        # Nexus Health Alerts
+        - alert: NexusDown
+          expr: up{job="nexus"} == 0
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Nexus instance {{ $labels.instance }} is down"
+            description: "Nexus instance {{ $labels.instance }} has been unreachable for more than 1 minute."
+
+        - alert: NexusClusterUnhealthy
+          expr: nexus_cluster_healthy_nodes{job="nexus"} < 2
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Nexus cluster has insufficient healthy nodes"
+            description: "Nexus cluster has fewer than 2 healthy nodes. Current: {{ $value }}"
+
+        - alert: NexusHashringRebalancing
+          expr: nexus_hashring_rebalancing{job="nexus"} == 1
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Nexus hashring rebalancing for over 10 minutes"
+            description: "Nexus hashring on {{ $labels.instance }} has been rebalancing for more than 10 minutes."
+
+        - alert: NexusAllocationLatencyHigh
+          expr: histogram_quantile(0.99, rate(nexus_allocation_duration_seconds_bucket{job="nexus"}[5m])) > 0.1
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Nexus allocation latency is high"
+            description: "Nexus allocation P99 latency is above 100ms. Current: {{ $value | printf \"%.3f\" }}s"
+
+    - name: ha.rules
+      interval: 30s
+      rules:
+        # HA Alerts
+        - alert: HAPeerDisconnected
+          expr: bng_ha_peer_connected{job="bng"} == 0
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "HA peer disconnected on {{ $labels.instance }}"
+            description: "BNG instance {{ $labels.instance }} has lost connection to its HA peer."
+
+        - alert: HASyncLagHigh
+          expr: bng_ha_sync_lag_seconds{job="bng"} > 5
+          for: 2m
+          labels:
+            severity: warning
+          annotations:
+            summary: "HA sync lag is high on {{ $labels.instance }}"
+            description: "HA sync lag on {{ $labels.instance }} is above 5 seconds. Current: {{ $value | printf \"%.1f\" }}s"
+
+        - alert: HAFailoverOccurred
+          expr: increase(bng_ha_failovers_total{job="bng"}[5m]) > 0
+          labels:
+            severity: warning
+          annotations:
+            summary: "HA failover occurred on {{ $labels.instance }}"
+            description: "A HA failover event was detected on {{ $labels.instance }}."
+
+    - name: network.rules
+      interval: 30s
+      rules:
+        # Network Alerts
+        - alert: HighPacketDropRate
+          expr: rate(bng_packets_dropped_total{job="bng"}[5m]) / rate(bng_packets_total{job="bng"}[5m]) > 0.001
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "High packet drop rate on {{ $labels.instance }}"
+            description: "Packet drop rate on {{ $labels.instance }} is above 0.1%. Current: {{ $value | printf \"%.3f\" }}%"
+
+        - alert: HighXDPDropRate
+          expr: rate(xdp_drop_total{job="bng"}[5m]) > 1000
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "High XDP drop rate on {{ $labels.instance }}"
+            description: "XDP drop rate on {{ $labels.instance }} is above 1000/s. Current: {{ $value | printf \"%.1f\" }}/s"
+
+        - alert: EBPFMapNearCapacity
+          expr: (ebpf_map_entries{job="bng"} / ebpf_map_max_entries{job="bng"}) > 0.9
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "eBPF map {{ $labels.map }} near capacity"
+            description: "eBPF map {{ $labels.map }} on {{ $labels.instance }} is above 90% capacity. Current: {{ $value | printf \"%.1f\" }}%"
+
+    - name: radius.rules
+      interval: 30s
+      rules:
+        # RADIUS Alerts
+        - alert: RADIUSServerUnreachable
+          expr: radius_server_up{job="bng"} == 0
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "RADIUS server {{ $labels.server }} is unreachable"
+            description: "RADIUS server {{ $labels.server }} has been unreachable from {{ $labels.instance }} for more than 1 minute."
+
+        - alert: RADIUSHighLatency
+          expr: histogram_quantile(0.99, rate(radius_request_duration_seconds_bucket{job="bng"}[5m])) > 1
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "RADIUS P99 latency is high"
+            description: "RADIUS P99 latency is above 1s. Current: {{ $value | printf \"%.2f\" }}s"
+
+        - alert: RADIUSHighRejectRate
+          expr: rate(radius_rejects_total{job="bng"}[5m]) / rate(radius_requests_total{job="bng"}[5m]) > 0.1
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "RADIUS reject rate is high"
+            description: "RADIUS reject rate is above 10%. Current: {{ $value | printf \"%.1f\" }}%"
