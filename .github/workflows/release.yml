@@ -60,7 +60,7 @@ jobs:
         run: make
 
       - name: Upload eBPF artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ebpf-objects
           path: src/bng/bpf/*.bpf.o

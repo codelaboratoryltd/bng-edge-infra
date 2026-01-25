@@ -96,7 +96,7 @@ jobs:
           done
 
       - name: Upload x86_64 artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ebpf-programs-x86_64
           path: src/bng/bpf/*.bpf.o
@@ -144,7 +144,7 @@ jobs:
           done
 
       - name: Upload arm64 artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ebpf-programs-arm64
           path: src/bng/bpf/*.bpf.o
@@ -394,7 +394,7 @@ jobs:
           done
 
       - name: Upload analysis artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ebpf-analysis
           path: |
