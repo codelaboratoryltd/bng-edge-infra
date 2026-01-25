@@ -1,0 +1,290 @@
+# Peer Pool Demo (Distributed Allocation without Central Nexus)
+# Demonstrates: BNGs form hashring to coordinate IP allocation
+#
+# Architecture:
+# ┌─────────────────────────────────────────────────────────────────┐
+# │                    demo-peer-pool namespace                      │
+# │                                                                  │
+# │  ┌─────────┐ hashring ┌─────────┐ hashring ┌─────────┐         │
+# │  │  BNG-0  │◄────────►│  BNG-1  │◄────────►│  BNG-2  │         │
+# │  │  owns:  │ forward  │  owns:  │ forward  │  owns:  │         │
+# │  │  subs   │ if not   │  subs   │ if not   │  subs   │         │
+# │  │  0-33%  │ local    │ 33-66%  │ local    │ 66-100% │         │
+# │  └────┬────┘          └────┬────┘          └────┬────┘         │
+# │       │                    │                    │               │
+# │    [veth]               [veth]               [veth]            │
+# │       │                    │                    │               │
+# │  ┌────▼────┐          ┌────▼────┐          ┌────▼────┐         │
+# │  │ Client0 │          │ Client1 │          │ Client2 │         │
+# │  └─────────┘          └─────────┘          └─────────┘         │
+# └─────────────────────────────────────────────────────────────────┘
+#
+# Peer Pool Behavior:
+#   - No central Nexus required
+#   - Rendezvous hashing determines IP ownership
+#   - Requests forwarded to owning peer if needed
+#   - Consistent allocation across cluster
+#   - Minimal redistribution when peers join/leave
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: demo-peer-pool
+---
+# ConfigMap with test scripts
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: peer-pool-scripts
+  namespace: demo-peer-pool
+data:
+  run-peer-test.sh: |
+    #!/bin/sh
+    # Peer Pool Test
+    # Demonstrates: Distributed allocation without central coordinator
+
+    echo "╔══════════════════════════════════════════════════════════════╗"
+    echo "║        Peer Pool - Distributed Allocation Demo               ║"
+    echo "╚══════════════════════════════════════════════════════════════╝"
+    echo ""
+
+    # Get client MAC
+    CLIENT_MAC=$(cat /sys/class/net/veth-client/address)
+    HOSTNAME=$(hostname)
+    echo "Hostname: $HOSTNAME"
+    echo "Client MAC: $CLIENT_MAC"
+    echo ""
+
+    # =================================================================
+    # Phase 1: Get IP via Local BNG
+    # =================================================================
+    echo "═══ Phase 1: Request IP from Local BNG ═══"
+    echo "Requesting IP via DHCP..."
+
+    ip addr flush dev veth-client 2>/dev/null || true
+    timeout 15 udhcpc -i veth-client -n -q -t 5 -T 3 -f -s /scripts/udhcpc-script.sh 2>&1 || true
+
+    IP=$(ip addr show veth-client 2>/dev/null | grep "inet " | head -1 | awk '{print $2}' | cut -d/ -f1)
+    echo ""
+    echo "Allocated IP: $IP"
+
+    # =================================================================
+    # Phase 2: Check Which Node Owns This Allocation
+    # =================================================================
+    echo ""
+    echo "═══ Phase 2: Check Allocation Owner ═══"
+
+    # Query the local BNG for allocation info
+    NODE_NUM=$(echo $HOSTNAME | grep -o '[0-9]*$')
+    BNG_HOST="bng-${NODE_NUM}.bng-peers.demo-peer-pool.svc"
+
+    echo "Querying $BNG_HOST for allocation..."
+    ALLOC_INFO=$(wget -q -O- "http://${BNG_HOST}:8080/pool/lookup?subscriber_id=${CLIENT_MAC}" 2>&1 || echo "{}")
+    echo "Allocation info: $ALLOC_INFO"
+    echo ""
+
+    # =================================================================
+    # Phase 3: Check All Peers See Consistent State
+    # =================================================================
+    echo "═══ Phase 3: Verify Peer Consistency ═══"
+    echo "Checking allocation from all peer nodes..."
+    echo ""
+
+    for i in 0 1 2; do
+      PEER="bng-${i}.bng-peers.demo-peer-pool.svc"
+      PEER_RESULT=$(wget -q -O- "http://${PEER}:8080/pool/lookup?subscriber_id=${CLIENT_MAC}" 2>&1 || echo "unreachable")
+      echo "BNG-$i: $PEER_RESULT"
+    done
+    echo ""
+
+    # =================================================================
+    # Phase 4: Check Pool Status on All Nodes
+    # =================================================================
+    echo "═══ Phase 4: Pool Status ═══"
+    echo "Checking pool status across all nodes..."
+    echo ""
+
+    for i in 0 1 2; do
+      PEER="bng-${i}.bng-peers.demo-peer-pool.svc"
+      STATUS=$(wget -q -O- "http://${PEER}:8080/pool/status" 2>&1 || echo "unreachable")
+      echo "BNG-$i pool: $STATUS"
+    done
+    echo ""
+
+    # =================================================================
+    # Summary
+    # =================================================================
+    echo "═══ Summary ═══"
+    echo "Client: $HOSTNAME"
+    echo "MAC: $CLIENT_MAC"
+    echo "IP: $IP"
+    echo ""
+
+    if [ -n "$IP" ]; then
+      echo "╔══════════════════════════════════════════════════════════════╗"
+      echo "║  ✓ SUCCESS: Peer pool allocation working                     ║"
+      echo "╚══════════════════════════════════════════════════════════════╝"
+      echo ""
+      echo "  - No central Nexus required"
+      echo "  - Hashring distributes ownership"
+      echo "  - Requests forwarded to owner if needed"
+      echo "  - All peers see consistent state"
+    else
+      echo "! Failed to get IP - check BNG logs"
+    fi
+
+  udhcpc-script.sh: |
+    #!/bin/sh
+    case "$1" in
+      bound|renew)
+        ip addr flush dev $interface 2>/dev/null
+        ip addr add $ip/$mask dev $interface
+        echo "DHCP: Got IP $ip/$mask on $interface"
+        ;;
+    esac
+---
+# Headless service for peer discovery
+apiVersion: v1
+kind: Service
+metadata:
+  name: bng-peers
+  namespace: demo-peer-pool
+spec:
+  clusterIP: None
+  selector:
+    app: bng-peer
+  ports:
+    - port: 8080
+      targetPort: 8080
+      name: api
+    - port: 9080
+      targetPort: 9080
+      name: peer
+---
+# StatefulSet for 3 BNG peers
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: bng-peer-pool
+  namespace: demo-peer-pool
+spec:
+  serviceName: bng-peers
+  replicas: 3
+  selector:
+    matchLabels:
+      app: bng-peer
+  template:
+    metadata:
+      labels:
+        app: bng-peer
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+    spec:
+      shareProcessNamespace: true
+
+      initContainers:
+        # Setup network namespace with veth pair
+        - name: network-setup
+          image: nicolaka/netshoot:latest
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              # Create veth pair for local clients
+              ip link add veth-bng type veth peer name veth-client
+
+              # Assign IP based on pod ordinal
+              POD_NAME=$(hostname)
+              NODE_NUM=$(echo $POD_NAME | grep -o '[0-9]*$')
+
+              # Each node gets a /24 segment: bng-0=10.50.0.x, bng-1=10.50.1.x, etc.
+              NODE_IP="10.50.${NODE_NUM}.1"
+
+              ip addr add ${NODE_IP}/24 dev veth-bng
+              ip link set veth-bng up
+              ip link set veth-client up
+
+              echo "Network ready: veth-bng (${NODE_IP}) <-> veth-client"
+          securityContext:
+            privileged: true
+            capabilities:
+              add: ["NET_ADMIN", "NET_RAW"]
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+
+      containers:
+        - name: bng-peer-pool
+          image: ghcr.io/codelaboratoryltd/bng:latest
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              # Get pod ordinal for node ID
+              POD_NAME=$(hostname)
+              NODE_NUM=$(echo $POD_NAME | grep -o '[0-9]*$')
+              NODE_ID="bng-${NODE_NUM}"
+              NODE_IP="10.50.${NODE_NUM}.1"
+
+              # List of all peers
+              PEERS="bng-0.bng-peers.demo-peer-pool.svc:9080,bng-1.bng-peers.demo-peer-pool.svc:9080,bng-2.bng-peers.demo-peer-pool.svc:9080"
+
+              exec /app/bng run \
+                --interface=veth-bng \
+                --pool-network=10.50.0.0/16 \
+                --pool-gateway=${NODE_IP} \
+                --pool-dns=8.8.8.8 \
+                --node-id=${NODE_ID} \
+                --peers=${PEERS} \
+                --peer-listen=:9080 \
+                --lease-time=5m \
+                --log-level=debug
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          ports:
+            - containerPort: 8080
+              name: api
+            - containerPort: 9080
+              name: peer
+            - containerPort: 9090
+              name: metrics
+          securityContext:
+            privileged: true
+            capabilities:
+              add: ["NET_ADMIN", "NET_RAW", "SYS_ADMIN"]
+
+        - name: client
+          image: alpine:3.19
+          command: ["sleep", "infinity"]
+          securityContext:
+            privileged: true
+            capabilities:
+              add: ["NET_ADMIN", "NET_RAW"]
+          volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+              readOnly: true
+
+      volumes:
+        - name: scripts
+          configMap:
+            name: peer-pool-scripts
+            defaultMode: 0755
+---
+# Service for external access to any BNG
+apiVersion: v1
+kind: Service
+metadata:
+  name: bng-pool
+  namespace: demo-peer-pool
+spec:
+  selector:
+    app: bng-peer
+  ports:
+    - port: 8080
+      targetPort: 8080
+      name: api

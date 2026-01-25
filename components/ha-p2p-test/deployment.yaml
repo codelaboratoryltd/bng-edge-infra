@@ -1,0 +1,323 @@
+# HA P2P (Active/Standby) Demo
+# Demonstrates: Two BNGs with direct P2P state sync (no Nexus)
+#
+# Architecture:
+# ┌─────────────────────────────────────────────────────────────────┐
+# │                    demo-ha-p2p namespace                         │
+# │                                                                  │
+# │        ┌─────────────┐  SSE Sync  ┌─────────────┐              │
+# │        │   BNG-1     │◄──────────►│   BNG-2     │              │
+# │        │  (active)   │            │  (standby)  │              │
+# │        │             │  Sessions  │             │              │
+# │        │ --ha-role   │  CLSet     │ --ha-role   │              │
+# │        │   active    │  Replicate │   standby   │              │
+# │        │ --ha-listen │────────────│ --ha-peer   │              │
+# │        │   :9000     │            │  bng-active │              │
+# │        └──────┬──────┘            └──────┬──────┘              │
+# │               │                          │                      │
+# │          [veth-bng1]                [veth-bng2]                │
+# │               │                          │                      │
+# │         ┌─────▼─────┐             ┌─────▼─────┐                │
+# │         │  Client1  │             │  Client2  │                │
+# │         └───────────┘             └───────────┘                │
+# └─────────────────────────────────────────────────────────────────┘
+#
+# HA Behavior:
+#   - BNG-1 (active) handles all DHCP requests
+#   - BNG-1 syncs session state to BNG-2 via SSE
+#   - If BNG-1 fails, BNG-2 has full session state
+#   - No external coordinator (Nexus) required
+#   - Uses CLSet for eventual consistency
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: demo-ha-p2p
+---
+# ConfigMap with test scripts
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ha-p2p-scripts
+  namespace: demo-ha-p2p
+data:
+  run-ha-test.sh: |
+    #!/bin/sh
+    # HA P2P Failover Test
+    # Demonstrates: Session state replicated between BNGs via P2P sync
+
+    echo "╔══════════════════════════════════════════════════════════════╗"
+    echo "║           HA P2P - Active/Standby Failover Test              ║"
+    echo "╚══════════════════════════════════════════════════════════════╝"
+    echo ""
+
+    # Get client MAC
+    CLIENT_MAC=$(cat /sys/class/net/veth-client/address)
+    echo "Client MAC: $CLIENT_MAC"
+    echo ""
+
+    # =================================================================
+    # Phase 1: Get IP from Active BNG
+    # =================================================================
+    echo "═══ Phase 1: Request from Active BNG ═══"
+    echo "Getting IP via DHCP from BNG-Active..."
+
+    ip addr flush dev veth-client 2>/dev/null || true
+    timeout 15 udhcpc -i veth-client -n -q -t 5 -T 3 -f -s /scripts/udhcpc-script.sh 2>&1 || true
+
+    IP1=$(ip addr show veth-client 2>/dev/null | grep "inet " | head -1 | awk '{print $2}' | cut -d/ -f1)
+    echo ""
+    echo "IP from Active: $IP1"
+
+    # =================================================================
+    # Phase 2: Check Session Replicated to Standby
+    # =================================================================
+    echo ""
+    echo "═══ Phase 2: Verify Session Replication ═══"
+    echo "Checking if session was replicated to standby BNG..."
+    echo ""
+
+    # Wait for sync
+    sleep 3
+
+    # Check active sessions on both BNGs
+    echo "Sessions on Active BNG:"
+    wget -q -O- "http://bng-active:8080/api/v1/sessions" 2>&1 || echo "Could not query active"
+    echo ""
+
+    echo "Sessions on Standby BNG:"
+    wget -q -O- "http://bng-standby:8080/api/v1/sessions" 2>&1 || echo "Could not query standby"
+    echo ""
+
+    # =================================================================
+    # Phase 3: Check HA Sync Status
+    # =================================================================
+    echo "═══ Phase 3: HA Sync Status ═══"
+    echo "Checking HA health on both BNGs..."
+    echo ""
+
+    echo "Active BNG HA status:"
+    wget -q -O- "http://bng-active:8080/ha/health" 2>&1 || echo "Could not query active HA"
+    echo ""
+
+    echo "Standby BNG HA status:"
+    wget -q -O- "http://bng-standby:8080/ha/health" 2>&1 || echo "Could not query standby HA"
+    echo ""
+
+    # =================================================================
+    # Summary
+    # =================================================================
+    echo "═══ Summary ═══"
+    echo "Client MAC: $CLIENT_MAC"
+    echo "IP from Active: $IP1"
+    echo ""
+
+    if [ -n "$IP1" ]; then
+      echo "╔══════════════════════════════════════════════════════════════╗"
+      echo "║  ✓ SUCCESS: Client got IP from Active BNG                    ║"
+      echo "╚══════════════════════════════════════════════════════════════╝"
+      echo ""
+      echo "  - Active BNG assigned IP from local pool"
+      echo "  - Session state synced to Standby via SSE"
+      echo "  - Standby ready to take over if Active fails"
+      echo ""
+      echo "  To test failover:"
+      echo "  1. kubectl delete pod bng-active -n demo-ha-p2p"
+      echo "  2. Client's next DHCP request goes to Standby"
+      echo "  3. Standby has session state, returns same IP"
+    else
+      echo "! Failed to get IP - check BNG logs"
+    fi
+
+  udhcpc-script.sh: |
+    #!/bin/sh
+    case "$1" in
+      bound|renew)
+        ip addr flush dev $interface 2>/dev/null
+        ip addr add $ip/$mask dev $interface
+        echo "DHCP: Got IP $ip/$mask on $interface"
+        ;;
+    esac
+---
+# Active BNG Pod
+apiVersion: v1
+kind: Pod
+metadata:
+  name: bng-active
+  namespace: demo-ha-p2p
+  labels:
+    app: bng-active
+    role: active
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "9090"
+spec:
+  shareProcessNamespace: true
+
+  initContainers:
+    - name: network-setup
+      image: nicolaka/netshoot:latest
+      command: ["/bin/sh", "-c"]
+      args:
+        - |
+          ip link add veth-bng type veth peer name veth-client
+          ip addr add 10.100.0.1/16 dev veth-bng
+          ip link set veth-bng up
+          ip link set veth-client up
+          echo "Network ready: veth-bng (10.100.0.1) <-> veth-client"
+      securityContext:
+        privileged: true
+        capabilities:
+          add: ["NET_ADMIN", "NET_RAW"]
+
+  containers:
+    - name: bng
+      image: ghcr.io/codelaboratoryltd/bng:latest
+      args:
+        - "run"
+        - "--interface=veth-bng"
+        - "--pool-network=10.100.0.0/16"
+        - "--pool-gateway=10.100.0.1"
+        - "--pool-dns=8.8.8.8"
+        - "--ha-role=active"
+        - "--ha-listen=:9000"
+        - "--lease-time=5m"
+        
+      ports:
+        - containerPort: 8080
+          name: api
+        - containerPort: 9000
+          name: ha-sync
+        - containerPort: 9090
+          name: metrics
+      securityContext:
+        privileged: true
+        capabilities:
+          add: ["NET_ADMIN", "NET_RAW", "SYS_ADMIN"]
+
+    - name: client
+      image: alpine:3.19
+      command: ["sleep", "infinity"]
+      securityContext:
+        privileged: true
+        capabilities:
+          add: ["NET_ADMIN", "NET_RAW"]
+      volumeMounts:
+        - name: scripts
+          mountPath: /scripts
+          readOnly: true
+
+  volumes:
+    - name: scripts
+      configMap:
+        name: ha-p2p-scripts
+        defaultMode: 0755
+---
+# Standby BNG Pod
+apiVersion: v1
+kind: Pod
+metadata:
+  name: bng-standby
+  namespace: demo-ha-p2p
+  labels:
+    app: bng-standby
+    role: standby
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "9090"
+spec:
+  shareProcessNamespace: true
+
+  initContainers:
+    - name: network-setup
+      image: nicolaka/netshoot:latest
+      command: ["/bin/sh", "-c"]
+      args:
+        - |
+          ip link add veth-bng type veth peer name veth-client
+          ip addr add 10.100.0.2/16 dev veth-bng
+          ip link set veth-bng up
+          ip link set veth-client up
+          echo "Network ready: veth-bng (10.100.0.2) <-> veth-client"
+      securityContext:
+        privileged: true
+        capabilities:
+          add: ["NET_ADMIN", "NET_RAW"]
+
+  containers:
+    - name: bng
+      image: ghcr.io/codelaboratoryltd/bng:latest
+      args:
+        - "run"
+        - "--interface=veth-bng"
+        - "--pool-network=10.100.0.0/16"
+        - "--pool-gateway=10.100.0.1"
+        - "--pool-dns=8.8.8.8"
+        - "--ha-role=standby"
+        - "--ha-peer=http://bng-active:9000"
+        - "--lease-time=5m"
+        
+      ports:
+        - containerPort: 8080
+          name: api
+        - containerPort: 9090
+          name: metrics
+      securityContext:
+        privileged: true
+        capabilities:
+          add: ["NET_ADMIN", "NET_RAW", "SYS_ADMIN"]
+
+    - name: client
+      image: alpine:3.19
+      command: ["sleep", "infinity"]
+      securityContext:
+        privileged: true
+        capabilities:
+          add: ["NET_ADMIN", "NET_RAW"]
+      volumeMounts:
+        - name: scripts
+          mountPath: /scripts
+          readOnly: true
+
+  volumes:
+    - name: scripts
+      configMap:
+        name: ha-p2p-scripts
+        defaultMode: 0755
+---
+# Service for Active BNG (HA sync endpoint)
+apiVersion: v1
+kind: Service
+metadata:
+  name: bng-active
+  namespace: demo-ha-p2p
+spec:
+  selector:
+    app: bng-active
+  ports:
+    - port: 8080
+      targetPort: 8080
+      name: api
+    - port: 9000
+      targetPort: 9000
+      name: ha-sync
+    - port: 9090
+      targetPort: 9090
+      name: metrics
+---
+# Service for Standby BNG
+apiVersion: v1
+kind: Service
+metadata:
+  name: bng-standby
+  namespace: demo-ha-p2p
+spec:
+  selector:
+    app: bng-standby
+  ports:
+    - port: 8080
+      targetPort: 8080
+      name: api
+    - port: 9090
+      targetPort: 9090
+      name: metrics

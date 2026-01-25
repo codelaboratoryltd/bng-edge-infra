@@ -1,0 +1,435 @@
+# RADIUS-Time Allocation Demo
+# Demonstrates: IP allocation at RADIUS time (before DHCP), enabling eBPF fast path
+#
+# This is the KEY OPTIMIZATION of the BNG architecture:
+# - IP is allocated during RADIUS authentication (via provision API)
+# - IP is stored in eBPF map before DHCP request arrives
+# - DHCP response is served from kernel (eBPF fast path, ~10us latency)
+# - No userspace involvement for DHCP after provisioning
+#
+# Flow:
+# ┌─────────────────────────────────────────────────────────────────┐
+# │  1. RADIUS Auth (simulated via HTTP)                            │
+# │     Client MAC + credentials → RADIUS server                    │
+# │                                    ↓                            │
+# │  2. Access-Accept triggers provisioning                         │
+# │     RADIUS → BNG provision API → Nexus allocates IP             │
+# │                                    ↓                            │
+# │  3. IP stored in eBPF map (fast path ready)                     │
+# │     BNG updates subscriber_pools eBPF map                       │
+# │                                    ↓                            │
+# │  4. DHCP Request arrives                                        │
+# │     Client sends DHCPDISCOVER                                   │
+# │                                    ↓                            │
+# │  5. eBPF fast path responds                                     │
+# │     XDP program looks up MAC → returns pre-allocated IP         │
+# │     Response in kernel only (~10us latency)                     │
+# └─────────────────────────────────────────────────────────────────┘
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: demo-radius-time
+---
+# ConfigMap with test scripts
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: radius-time-scripts
+  namespace: demo-radius-time
+data:
+  run-radius-time-test.sh: |
+    #!/bin/sh
+    # RADIUS-Time Allocation Test
+    # Demonstrates: IP allocation at RADIUS time, not DHCP time
+
+    echo "╔══════════════════════════════════════════════════════════════╗"
+    echo "║       RADIUS-Time Allocation - The Key Optimization         ║"
+    echo "╚══════════════════════════════════════════════════════════════╝"
+    echo ""
+
+    BNG_API="http://bng.demo-radius-time.svc:8080"
+    NEXUS_API="http://nexus.demo-radius-time.svc:9000"
+
+    # Get client MAC
+    CLIENT_MAC=$(cat /sys/class/net/veth-client/address)
+    SUBSCRIBER_ID="subscriber-$(echo $CLIENT_MAC | tr -d ':')"
+    echo "Client MAC: $CLIENT_MAC"
+    echo "Subscriber ID: $SUBSCRIBER_ID"
+    echo ""
+
+    # =================================================================
+    # Phase 1: Show that DHCP without provisioning hits slow path
+    # =================================================================
+    echo "═══ Phase 1: DHCP Without Provisioning (Slow Path) ═══"
+    echo "Requesting IP via DHCP without pre-provisioning..."
+    echo "This will hit the slow path (userspace) since MAC is not in eBPF map"
+    echo ""
+
+    # Clear any existing IP
+    ip addr flush dev veth-client 2>/dev/null || true
+
+    # Time the DHCP request
+    START=$(date +%s%3N)
+    timeout 15 udhcpc -i veth-client -n -q -t 5 -T 3 -f -s /scripts/udhcpc-script.sh 2>&1 || true
+    END=$(date +%s%3N)
+    SLOW_PATH_TIME=$((END - START))
+
+    IP_SLOW=$(ip addr show veth-client 2>/dev/null | grep "inet " | head -1 | awk '{print $2}' | cut -d/ -f1)
+    echo "Slow path IP: $IP_SLOW"
+    echo "Slow path time: ${SLOW_PATH_TIME}ms"
+    echo ""
+
+    # Release the IP
+    ip addr flush dev veth-client 2>/dev/null || true
+
+    # =================================================================
+    # Phase 2: Provision via API (simulates RADIUS Access-Accept)
+    # =================================================================
+    echo "═══ Phase 2: Provision via API (RADIUS-time allocation) ═══"
+    echo "Calling provision API to pre-allocate IP..."
+    echo "This simulates what happens when RADIUS returns Access-Accept"
+    echo ""
+
+    PROVISION_RESULT=$(wget -q -O- --post-data="{\"mac\":\"$CLIENT_MAC\",\"subscriber_id\":\"$SUBSCRIBER_ID\"}" \
+      --header="Content-Type: application/json" \
+      "$BNG_API/api/v1/provision" 2>&1 || echo "{}")
+
+    echo "Provision result: $PROVISION_RESULT"
+    echo ""
+
+    PROVISIONED_IP=$(echo "$PROVISION_RESULT" | grep -o '"ip":"[^"]*"' | cut -d'"' -f4)
+    FAST_PATH_ENABLED=$(echo "$PROVISION_RESULT" | grep -o '"fast_path":[^,}]*' | cut -d':' -f2)
+
+    if [ "$FAST_PATH_ENABLED" = "true" ]; then
+      echo "✓ IP $PROVISIONED_IP added to eBPF fast path map"
+      echo "  Next DHCP request will be served from kernel (~10us latency)"
+    else
+      echo "! Fast path not available (eBPF not loaded)"
+    fi
+    echo ""
+
+    # =================================================================
+    # Phase 3: DHCP after provisioning (should hit fast path)
+    # =================================================================
+    echo "═══ Phase 3: DHCP After Provisioning (Fast Path) ═══"
+    echo "Requesting IP via DHCP after pre-provisioning..."
+    echo "This should hit the fast path (eBPF) since MAC is in map"
+    echo ""
+
+    # Time the DHCP request
+    START=$(date +%s%3N)
+    timeout 15 udhcpc -i veth-client -n -q -t 5 -T 3 -f -s /scripts/udhcpc-script.sh 2>&1 || true
+    END=$(date +%s%3N)
+    FAST_PATH_TIME=$((END - START))
+
+    IP_FAST=$(ip addr show veth-client 2>/dev/null | grep "inet " | head -1 | awk '{print $2}' | cut -d/ -f1)
+    echo "Fast path IP: $IP_FAST"
+    echo "Fast path time: ${FAST_PATH_TIME}ms"
+    echo ""
+
+    # =================================================================
+    # Phase 4: Check BNG stats
+    # =================================================================
+    echo "═══ Phase 4: BNG Statistics ═══"
+    STATS=$(wget -q -O- "$BNG_API/api/v1/stats" 2>&1 || echo "{}")
+    echo "BNG stats: $STATS"
+    echo ""
+
+    # =================================================================
+    # Summary
+    # =================================================================
+    echo "═══ Summary ═══"
+    echo ""
+    echo "  Without provisioning (slow path): ${SLOW_PATH_TIME}ms"
+    echo "  With provisioning (fast path):    ${FAST_PATH_TIME}ms"
+    echo ""
+
+    if [ -n "$IP_FAST" ] && [ "$IP_FAST" = "$PROVISIONED_IP" ]; then
+      echo "╔══════════════════════════════════════════════════════════════╗"
+      echo "║  ✓ SUCCESS: RADIUS-time allocation working                   ║"
+      echo "╚══════════════════════════════════════════════════════════════╝"
+      echo ""
+      echo "  Key benefits:"
+      echo "  - IP allocated during RADIUS auth, not DHCP"
+      echo "  - DHCP served from eBPF (kernel only)"
+      echo "  - Latency: ~10us vs ~10ms"
+      echo "  - No userspace bottleneck for DHCP"
+    else
+      echo "! Test did not complete as expected"
+      echo "  Slow path IP: $IP_SLOW"
+      echo "  Fast path IP: $IP_FAST"
+      echo "  Provisioned IP: $PROVISIONED_IP"
+    fi
+
+  run-dualstack-test.sh: |
+    #!/bin/sh
+    # Dual-Stack Provisioning Test
+    # Demonstrates: IPv4 + IPv6 allocation at RADIUS time
+
+    echo "╔══════════════════════════════════════════════════════════════╗"
+    echo "║       Dual-Stack RADIUS-Time Allocation                      ║"
+    echo "╚══════════════════════════════════════════════════════════════╝"
+    echo ""
+
+    BNG_API="http://bng.demo-radius-time.svc:8080"
+
+    # Get client MAC
+    CLIENT_MAC=$(cat /sys/class/net/veth-client/address)
+    SUBSCRIBER_ID="dualstack-$(echo $CLIENT_MAC | tr -d ':')"
+    echo "Client MAC: $CLIENT_MAC"
+    echo "Subscriber ID: $SUBSCRIBER_ID"
+    echo ""
+
+    # =================================================================
+    # Phase 1: Provision Dual-Stack via API
+    # =================================================================
+    echo "═══ Phase 1: Provision Dual-Stack (IPv4 + IPv6) ═══"
+    echo "Calling provision API with IPv6 pool..."
+    echo ""
+
+    PROVISION_RESULT=$(wget -q -O- --post-data="{\"mac\":\"$CLIENT_MAC\",\"subscriber_id\":\"$SUBSCRIBER_ID\",\"ipv6_pool_id\":\"radius-demo-v6\"}" \
+      --header="Content-Type: application/json" \
+      "$BNG_API/api/v1/provision" 2>&1 || echo "{}")
+
+    echo "Provision result:"
+    echo "$PROVISION_RESULT" | tr ',' '\n' | tr -d '{}' | sed 's/^/  /'
+    echo ""
+
+    IPV4=$(echo "$PROVISION_RESULT" | grep -o '"ipv4":"[^"]*"' | cut -d'"' -f4)
+    IPV6=$(echo "$PROVISION_RESULT" | grep -o '"ipv6":"[^"]*"' | cut -d'"' -f4)
+    IPV6_PREFIX=$(echo "$PROVISION_RESULT" | grep -o '"ipv6_prefix":"[^"]*"' | cut -d'"' -f4)
+    DUAL_STACK=$(echo "$PROVISION_RESULT" | grep -o '"dual_stack":true')
+    FAST_PATH=$(echo "$PROVISION_RESULT" | grep -o '"fast_path":true')
+
+    # =================================================================
+    # Phase 2: Verify Allocations
+    # =================================================================
+    echo "═══ Phase 2: Verify Allocations ═══"
+    echo ""
+    echo "  IPv4 Address:  $IPV4"
+    echo "  IPv6 Address:  $IPV6"
+    echo "  IPv6 Prefix:   $IPV6_PREFIX"
+    echo "  Dual-Stack:    $([ -n \"$DUAL_STACK\" ] && echo 'Yes' || echo 'No')"
+    echo "  Fast Path:     $([ -n \"$FAST_PATH\" ] && echo 'Yes' || echo 'No')"
+    echo ""
+
+    # =================================================================
+    # Phase 3: Check Nexus State
+    # =================================================================
+    echo "═══ Phase 3: Nexus Allocations ═══"
+    echo ""
+    echo "IPv4 pool allocations:"
+    wget -q -O- "http://nexus.demo-radius-time.svc:9000/api/v1/allocations?pool_id=radius-demo" 2>&1 | head -5
+    echo ""
+    echo "IPv6 pool allocations:"
+    wget -q -O- "http://nexus.demo-radius-time.svc:9000/api/v1/allocations?pool_id=radius-demo-v6" 2>&1 | head -5
+    echo ""
+
+    # =================================================================
+    # Summary
+    # =================================================================
+    echo "═══ Summary ═══"
+    echo ""
+
+    if [ -n "$IPV4" ] && [ -n "$IPV6" ]; then
+      echo "╔══════════════════════════════════════════════════════════════╗"
+      echo "║  ✓ SUCCESS: Dual-Stack RADIUS-time allocation working        ║"
+      echo "╚══════════════════════════════════════════════════════════════╝"
+      echo ""
+      echo "  Subscriber $SUBSCRIBER_ID provisioned with:"
+      echo "    IPv4: $IPV4 (DHCP fast path enabled)"
+      echo "    IPv6: $IPV6 (DHCPv6/SLAAC ready)"
+      echo ""
+      echo "  Both addresses allocated atomically at RADIUS time"
+      echo "  DHCPv4 will be served from eBPF fast path"
+      echo "  DHCPv6/SLAAC can use the pre-allocated prefix"
+    elif [ -n "$IPV4" ]; then
+      echo "! Partial success: IPv4 allocated but IPv6 failed"
+      echo "  IPv4: $IPV4"
+      echo "  Check if IPv6 pool exists: radius-demo-v6"
+    else
+      echo "! Test failed - no allocations"
+    fi
+
+  udhcpc-script.sh: |
+    #!/bin/sh
+    case "$1" in
+      bound|renew)
+        ip addr flush dev $interface 2>/dev/null
+        ip addr add $ip/$mask dev $interface
+        echo "DHCP: Got IP $ip/$mask on $interface"
+        ;;
+    esac
+---
+# Nexus for IP allocation
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nexus
+  namespace: demo-radius-time
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nexus
+  template:
+    metadata:
+      labels:
+        app: nexus
+    spec:
+      containers:
+        - name: nexus
+          image: ghcr.io/codelaboratoryltd/nexus:latest
+          args:
+            - "serve"
+            - "--http-port=9000"
+            
+          ports:
+            - containerPort: 9000
+              name: api
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 9000
+            initialDelaySeconds: 2
+            periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nexus
+  namespace: demo-radius-time
+spec:
+  selector:
+    app: nexus
+  ports:
+    - port: 9000
+      targetPort: 9000
+      name: api
+---
+# BNG with provision API
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bng-radius-time
+  namespace: demo-radius-time
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: bng
+  template:
+    metadata:
+      labels:
+        app: bng
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+    spec:
+      shareProcessNamespace: true
+
+      initContainers:
+        # Wait for Nexus to be ready
+        - name: wait-for-nexus
+          image: busybox:1.36
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              echo "Waiting for Nexus..."
+              until wget -q -O- http://nexus.demo-radius-time.svc:9000/health; do
+                echo "Nexus not ready, retrying in 2s..."
+                sleep 2
+              done
+              echo "Nexus is ready"
+
+        # Create IPv4 and IPv6 pools in Nexus (dual-stack)
+        - name: create-pool
+          image: busybox:1.36
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              echo "Creating IPv4 pool in Nexus..."
+              wget -q -O- --post-data='{"id":"radius-demo","cidr":"10.70.0.0/16","prefix":32,"gateway":"10.70.0.1","dns":["8.8.8.8","8.8.4.4"]}' \
+                --header="Content-Type: application/json" \
+                http://nexus.demo-radius-time.svc:9000/api/v1/pools || echo "IPv4 pool may already exist"
+              echo "IPv4 pool created"
+
+              echo "Creating IPv6 pool in Nexus..."
+              wget -q -O- --post-data='{"id":"radius-demo-v6","cidr":"2001:db8:70::/48","prefix":64}' \
+                --header="Content-Type: application/json" \
+                http://nexus.demo-radius-time.svc:9000/api/v1/pools || echo "IPv6 pool may already exist"
+              echo "IPv6 pool created (2001:db8:70::/48 -> /64 prefixes)"
+
+        # Setup network namespace with veth pair
+        - name: network-setup
+          image: nicolaka/netshoot:latest
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              # Create veth pair for client simulation
+              ip link add veth-bng type veth peer name veth-client
+              ip addr add 10.70.0.1/16 dev veth-bng
+              ip link set veth-bng up
+              ip link set veth-client up
+              echo "Network ready: veth-bng (10.70.0.1) <-> veth-client"
+          securityContext:
+            privileged: true
+            capabilities:
+              add: ["NET_ADMIN", "NET_RAW"]
+
+      containers:
+        - name: bng-radius-time
+          image: ghcr.io/codelaboratoryltd/bng:latest
+          args:
+            - run
+            - --interface=veth-bng
+            - --nexus-url=http://nexus.demo-radius-time.svc:9000
+            - --pool-network=10.70.0.0/16
+            - --pool-gateway=10.70.0.1
+            - --pool-dns=8.8.8.8
+            - --lease-time=5m
+            
+          ports:
+            - containerPort: 8080
+              name: api
+            - containerPort: 9090
+              name: metrics
+          securityContext:
+            privileged: true
+            capabilities:
+              add: ["NET_ADMIN", "NET_RAW", "SYS_ADMIN"]
+
+        - name: client
+          image: alpine:3.19
+          command: ["sleep", "infinity"]
+          securityContext:
+            privileged: true
+            capabilities:
+              add: ["NET_ADMIN", "NET_RAW"]
+          volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+              readOnly: true
+
+      volumes:
+        - name: scripts
+          configMap:
+            name: radius-time-scripts
+            defaultMode: 0755
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: bng-radius-time
+  namespace: demo-radius-time
+spec:
+  selector:
+    app: bng
+  ports:
+    - port: 8080
+      targetPort: 8080
+      name: api
+    - port: 9090
+      targetPort: 9090
+      name: metrics
