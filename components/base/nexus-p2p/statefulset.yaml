@@ -1,0 +1,80 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: nexus
+  labels:
+    app: nexus
+spec:
+  serviceName: nexus
+  replicas: 3
+  selector:
+    matchLabels:
+      app: nexus
+  template:
+    metadata:
+      labels:
+        app: nexus
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9002"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+        - name: nexus
+          image: ghcr.io/codelaboratoryltd/nexus:latest
+          args:
+            - serve
+            - --http-port=9000
+            - --metrics-port=9002
+            - --p2p-port=33123
+            - --p2p=true
+            - --role=core
+            - --data-path=/data
+          ports:
+            - name: http
+              containerPort: 9000
+              protocol: TCP
+            - name: metrics
+              containerPort: 9002
+              protocol: TCP
+            - name: p2p
+              containerPort: 33123
+              protocol: TCP
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            # mDNS discovery for local k3d cluster
+            - name: NEXUS_DISCOVERY
+              value: "mdns"
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 9000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 9000
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          volumeMounts:
+            - name: data
+              mountPath: /data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 100Mi

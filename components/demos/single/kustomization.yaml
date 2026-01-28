@@ -1,0 +1,22 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Demo B: Single Integration (1 Nexus + 1 BNG)
+# BNG integrated with Nexus for IP allocation
+
+namespace: demo-single
+
+resources:
+  - namespace.yaml
+  - ../../base/bng
+  - ../../base/nexus
+
+namePrefix: single-
+
+labels:
+  - pairs:
+      demo: single
+
+patches:
+  - path: patch-bng.yaml
+  - path: patch-nexus.yaml

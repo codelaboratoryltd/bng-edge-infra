@@ -46,15 +46,35 @@ brew install cilium-cli
 ### Start Development Environment
 
 ```bash
-# From repository root
+# Initialize cluster (first time only)
+./scripts/init.sh
+
+# Run without args to see available groups
 tilt up
+
+# Start specific demo/test
+tilt up demo-a              # Standalone BNG
+tilt up demo-b              # Single integration (BNG + Nexus)
+tilt up demo-c              # P2P cluster (3 Nexus)
+tilt up demo-d              # Distributed (3 Nexus + 2 BNG)
+tilt up e2e                 # E2E integration test
+tilt up all                 # Everything
+
+# Multiple groups at once
+tilt up demo-a demo-b infra
 ```
 
 This will:
-1. Create k3d cluster with Cilium CNI
-2. Install Cilium, Hubble, Prometheus, Grafana
-3. Apply BNG components (when implemented)
+1. Build Docker images for BNG and Nexus
+2. Deploy selected resources via kustomize
+3. Set up port forwarding
 4. Open Tilt UI at http://localhost:10350
+
+Available groups:
+- **Demos**: `demo-a`, `demo-b`, `demo-c`, `demo-d`, `demos` (all demos)
+- **Tests**: `e2e`, `blaster`, `wifi`, `pppoe`, `ipv6`, `nat`, `qos`, `bgp`, etc.
+- **Infrastructure**: `infra` (Hubble, Prometheus, Grafana)
+- **Everything**: `all`
 
 ### Verify Cluster
 

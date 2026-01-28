@@ -1,0 +1,23 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Demo D: Full Distributed (3 Nexus + 2 BNG)
+# Complete distributed deployment with P2P Nexus cluster and multiple BNG instances
+
+namespace: demo-distributed
+
+resources:
+  - namespace.yaml
+  - ../../base/nexus-p2p
+  - bng-statefulset.yaml
+
+namePrefix: distributed-
+
+labels:
+  - pairs:
+      demo: distributed
+
+# Native kustomize replicas transformer
+replicas:
+  - name: nexus
+    count: 3

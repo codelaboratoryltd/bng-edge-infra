@@ -1,0 +1,22 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Demo C: Nexus P2P Cluster (3 Nexus with mDNS discovery)
+# Demonstrates CRDT synchronization and hashring-based allocation
+
+namespace: demo-p2p
+
+resources:
+  - namespace.yaml
+  - ../../base/nexus-p2p
+
+namePrefix: p2p-
+
+labels:
+  - pairs:
+      demo: p2p
+
+# Native kustomize replicas transformer
+replicas:
+  - name: nexus
+    count: 3

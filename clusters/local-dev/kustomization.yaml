@@ -1,17 +1,85 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
+# Master kustomization for local development
+# Composes all infrastructure, demos, and tests
+# Tilt deploys everything via this single entry point
+
 # Note: Don't set namespace here - let resources use their declared namespaces
-# (Cilium → kube-system, Prometheus/Grafana → monitoring)
+# (Cilium → kube-system, Prometheus/Grafana → monitoring, demos → demo-*)
 
 resources:
-  # Helm charts templated via helmfile
+  # ==========================================================================
+  # Infrastructure (Helm charts templated via helmfile)
+  # ==========================================================================
   - ../../charts/cilium
   - ../../charts/prometheus
   - ../../charts/grafana
 
-  # BNG components (to be added later)
-  # - ../../components/bng
-
   # Namespace for monitoring stack
   - namespace-monitoring.yaml
+
+  # ==========================================================================
+  # Demo Overlays (all deployed, Tilt handles dependencies)
+  # ==========================================================================
+
+  # Demo A: Standalone BNG (no Nexus)
+  - ../../components/demos/standalone
+
+  # Demo B: Single Integration (1 BNG + 1 Nexus)
+  - ../../components/demos/single
+
+  # Demo C: Nexus P2P Cluster (3 Nexus with mDNS)
+  - ../../components/demos/p2p-cluster
+
+  # Demo D: Full Distributed (3 Nexus + 2 BNG)
+  - ../../components/demos/distributed
+
+  # ==========================================================================
+  # Test Components (self-contained kustomizations)
+  # ==========================================================================
+
+  # E2E Integration Test: Real DHCP → BNG → Nexus
+  - ../../components/e2e-test
+
+  # BNG Blaster Traffic Generator
+  - ../../components/bngblaster
+
+  # Blaster Test: Real L2 DHCP
+  - ../../components/blaster-test
+
+  # Walled Garden Test: Unknown → Walled Garden → Production
+  - ../../components/walled-garden-test
+
+  # HA with Nexus Test: Two BNGs + shared Nexus
+  - ../../components/ha-nexus-test
+
+  # HA P2P Test: Active/Standby BNGs with direct sync
+  - ../../components/ha-p2p-test
+
+  # WiFi Test: TTL-based lease mode
+  - ../../components/wifi-test
+
+  # Peer Pool Test: Distributed allocation without Nexus
+  - ../../components/peer-pool-test
+
+  # RADIUS-Time Test: IP allocation at RADIUS time
+  - ../../components/radius-time-test
+
+  # PPPoE Test: Full PPPoE session lifecycle
+  - ../../components/pppoe-test
+
+  # IPv6 Test: SLAAC + DHCPv6 + PD
+  - ../../components/ipv6-test
+
+  # NAT Test: CGNAT with port blocks
+  - ../../components/nat-test
+
+  # QoS Test: Per-subscriber rate limiting
+  - ../../components/qos-test
+
+  # Failure Test: Resilience and failover scenarios
+  - ../../components/failure-test
+
+  # BGP Test: FRR peering and subscriber routes
+  - ../../components/bgp-test

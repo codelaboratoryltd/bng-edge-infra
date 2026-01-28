@@ -19,16 +19,29 @@ The BNG runs directly on OLT hardware at ISP edge locations using eBPF/XDP for k
 ```
 bng-edge-infra/
 ├── clusters/
-│   ├── local-dev/      # k3d development cluster config
-│   ├── staging/        # Staging Flux manifests
-│   └── production/     # Production Flux manifests
-├── components/         # Kustomize components (CNI, monitoring, BNG manifests)
+│   ├── local-dev/           # k3d development cluster config
+│   │   └── kustomization.yaml  # Master kustomization (composes all demos/tests)
+│   ├── staging/             # Staging Flux manifests
+│   └── production/          # Production Flux manifests
+├── components/
+│   ├── base/                # Reusable base components
+│   │   ├── bng/             # BNG Deployment + Service
+│   │   ├── nexus/           # Nexus StatefulSet + Service
+│   │   └── nexus-p2p/       # Nexus P2P cluster variant
+│   ├── demos/               # Demo overlays (use base components)
+│   │   ├── standalone/      # Demo A: BNG only
+│   │   ├── single/          # Demo B: BNG + Nexus
+│   │   ├── p2p-cluster/     # Demo C: 3 Nexus P2P
+│   │   └── distributed/     # Demo D: 3 Nexus + 2 BNG
+│   ├── *-test/              # Test components (e2e, wifi, pppoe, etc.)
+│   └── monitoring/          # Grafana dashboards, Prometheus rules
+├── charts/                  # Helm charts (Cilium, Prometheus, Grafana)
 ├── scripts/
-│   └── helmfile.yaml   # Helm chart definitions
+│   └── helmfile.yaml        # Helm chart definitions
 ├── src/
-│   ├── bng/            # SUBMODULE: OLT-BNG source (see src/bng/CLAUDE.md)
-│   └── nexus/          # SUBMODULE: Nexus source
-└── Tiltfile            # Local development orchestration
+│   ├── bng/                 # SUBMODULE: OLT-BNG source (see src/bng/CLAUDE.md)
+│   └── nexus/               # SUBMODULE: Nexus source
+└── Tiltfile                 # Local development orchestration
 ```
 
 ## Common Commands
@@ -36,8 +49,19 @@ bng-edge-infra/
 ### Local Development
 
 ```bash
-# Start local k3d cluster with Cilium, Hubble, Prometheus, Grafana
-tilt up
+# Initialize cluster (first time only)
+./scripts/init.sh
+
+# Start specific demo/test (run without args to see available groups)
+tilt up demo-a              # Standalone BNG
+tilt up demo-b              # Single integration (BNG + Nexus)
+tilt up demo-c              # P2P cluster (3 Nexus)
+tilt up demo-d              # Distributed (3 Nexus + 2 BNG)
+tilt up e2e                 # E2E integration test
+tilt up all                 # Everything
+
+# Multiple groups
+tilt up demo-a demo-b
 
 # Stop development environment (preserves cluster)
 tilt down
@@ -156,13 +180,20 @@ The k3d cluster (`bng-edge`, context: `k3d-bng-edge`) is configured with:
 - kube-proxy replacement via eBPF
 - Prometheus and Grafana
 
-Access after `tilt up`:
+Access after `tilt up <group>`:
 - Tilt UI: http://localhost:10350
-- BNG API: http://localhost:8080
-- Nexus API: http://localhost:9000
-- Hubble UI: http://localhost:12000
-- Prometheus: http://localhost:9090
-- Grafana: http://localhost:3000 (admin/admin)
+- Hubble UI: http://localhost:12000 (with infra)
+- Prometheus: http://localhost:9090 (with infra)
+- Grafana: http://localhost:3000 (with infra)
+
+Demo-specific ports (when enabled):
+- Demo A (Standalone BNG): http://localhost:8080
+- Demo B (Single BNG): http://localhost:8081
+- Demo B (Single Nexus): http://localhost:9001
+- Demo C (P2P Nexus): http://localhost:9002
+- Demo D (Distributed BNG): http://localhost:8083
+- Demo D (Distributed Nexus): http://localhost:9003
+- E2E Nexus: http://localhost:9010
 
 ## Performance Targets
 
