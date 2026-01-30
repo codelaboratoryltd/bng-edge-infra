@@ -1,0 +1,93 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: rendezvous-server
+  labels:
+    app: rendezvous-server
+spec:
+  serviceName: rendezvous-server
+  replicas: 1
+  selector:
+    matchLabels:
+      app: rendezvous-server
+  template:
+    metadata:
+      labels:
+        app: rendezvous-server
+    spec:
+      serviceAccountName: rendezvous-server
+      initContainers:
+        # Publish peer ID to ConfigMap so other pods can discover it
+        - name: publish-peer-id
+          image: ghcr.io/codelaboratoryltd/nexus:latest
+          command:
+            - sh
+            - -c
+            - |
+              # Get peer ID (generates key if not exists)
+              PEER_ID=$(nexus peer-id --data-path=/data)
+              echo "Rendezvous server peer ID: ${PEER_ID}"
+
+              # Construct the full multiaddr
+              # Use DNS name for service discovery within the cluster
+              SERVICE_NAME="${HOSTNAME%-*}"  # Remove pod ordinal suffix
+              NAMESPACE=$(cat /var/run/secrets/kubernetes.io/serviceaccount/namespace)
+              MULTIADDR="/dns4/${SERVICE_NAME}.${NAMESPACE}.svc.cluster.local/tcp/8765/p2p/${PEER_ID}"
+
+              echo "Publishing multiaddr: ${MULTIADDR}"
+
+              # Update ConfigMap using kubectl
+              cat > /tmp/patch.json << EOF
+              {"data": {"RENDEZVOUS_MULTIADDR": "${MULTIADDR}"}}
+              EOF
+
+              # Use the kubernetes API to patch the configmap
+              TOKEN=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
+              CACERT=/var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+              APISERVER=https://kubernetes.default.svc
+
+              curl -s --cacert ${CACERT} \
+                -H "Authorization: Bearer ${TOKEN}" \
+                -H "Content-Type: application/strategic-merge-patch+json" \
+                -X PATCH \
+                "${APISERVER}/api/v1/namespaces/${NAMESPACE}/configmaps/rendezvous-config" \
+                -d @/tmp/patch.json
+
+              echo "ConfigMap updated successfully"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      containers:
+        - name: rendezvous
+          image: ghcr.io/codelaboratoryltd/nexus:latest
+          args:
+            - rendezvous
+            - --port=8765
+            - --data-path=/data
+          ports:
+            - name: p2p
+              containerPort: 8765
+              protocol: TCP
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          livenessProbe:
+            tcpSocket:
+              port: 8765
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          volumeMounts:
+            - name: data
+              mountPath: /data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 100Mi

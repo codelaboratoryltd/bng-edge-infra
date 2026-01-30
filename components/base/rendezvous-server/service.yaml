@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: rendezvous-server
+  labels:
+    app: rendezvous-server
+spec:
+  type: ClusterIP
+  ports:
+    - name: p2p
+      port: 8765
+      targetPort: 8765
+      protocol: TCP
+  selector:
+    app: rendezvous-server
