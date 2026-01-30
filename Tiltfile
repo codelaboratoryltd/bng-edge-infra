@@ -14,9 +14,9 @@
 #   tilt up all                      # Everything
 #
 # Architecture:
-#   - Single kustomization loads all manifests
-#   - config.set_enabled_resources() controls what deploys
-#   - Use Tilt UI labels to filter resources
+#   - Each group has its own kustomization
+#   - Only selected groups are applied to cluster
+#   - config.set_enabled_resources() controls what Tilt manages
 
 print("""
 -----------------------------------------------------------------
@@ -32,57 +32,109 @@ config.define_string_list("with", args=True)
 cfg = config.parse()
 
 # =============================================================================
-# Resource Groups
+# Group -> Kustomization Path Mapping
 # =============================================================================
 
-groups = {
+# Each group maps to its kustomization path and resource names
+group_kustomizations = {
     # Demos
-    "demo-a": ["standalone-bng"],
-    "demo-b": ["single-bng", "single-nexus"],
-    "demo-c": ["p2p-nexus"],
-    "demo-d": ["distributed-bng", "distributed-nexus"],
+    "demo-a": {
+        "path": "components/demos/standalone",
+        "resources": ["standalone-bng"],
+    },
+    "demo-b": {
+        "path": "components/demos/single",
+        "resources": ["single-bng", "single-nexus"],
+    },
+    "demo-c": {
+        "path": "components/demos/p2p-cluster",
+        "resources": ["p2p-nexus"],
+    },
+    "demo-d": {
+        "path": "components/demos/distributed",
+        "resources": ["distributed-bng", "distributed-nexus"],
+    },
 
     # Tests
-    "e2e": ["nexus", "bng-e2e"],
-    "blaster": ["bngblaster"],
-    "blaster-test": ["bng-dhcp-test"],
-    "walled-garden": ["bng-wgar-test"],
-    "ha-nexus": ["bng-ha-test"],
-    "ha-p2p": ["bng-active", "bng-standby"],
-    "wifi": ["bng-wifi"],
-    "peer-pool": ["bng-peer-pool"],
-    "radius-time": ["bng-radius-time"],
-    "pppoe": ["pppoe-test"],
-    "ipv6": ["bng-ipv6"],
-    "nat": ["bng-nat"],
-    "qos": ["qos-test"],
-    "bgp": ["bng-bgp", "frr-upstream"],
-    "failure": ["nexus-failure", "bng-failure-active", "bng-failure-standby", "test-controller"],
+    "e2e": {
+        "path": "components/e2e-test",
+        "resources": ["nexus", "bng-e2e"],
+    },
+    "blaster": {
+        "path": "components/bngblaster",
+        "resources": ["bngblaster"],
+    },
+    "blaster-test": {
+        "path": "components/blaster-test",
+        "resources": ["bng-dhcp-test"],
+    },
+    "walled-garden": {
+        "path": "components/walled-garden-test",
+        "resources": ["bng-wgar-test"],
+    },
+    "ha-nexus": {
+        "path": "components/ha-nexus-test",
+        "resources": ["bng-ha-test"],
+    },
+    "ha-p2p": {
+        "path": "components/ha-p2p-test",
+        "resources": ["bng-active", "bng-standby"],
+    },
+    "wifi": {
+        "path": "components/wifi-test",
+        "resources": ["bng-wifi"],
+    },
+    "peer-pool": {
+        "path": "components/peer-pool-test",
+        "resources": ["bng-peer-pool"],
+    },
+    "radius-time": {
+        "path": "components/radius-time-test",
+        "resources": ["bng-radius-time"],
+    },
+    "pppoe": {
+        "path": "components/pppoe-test",
+        "resources": ["pppoe-test"],
+    },
+    "ipv6": {
+        "path": "components/ipv6-test",
+        "resources": ["bng-ipv6"],
+    },
+    "nat": {
+        "path": "components/nat-test",
+        "resources": ["bng-nat"],
+    },
+    "qos": {
+        "path": "components/qos-test",
+        "resources": ["qos-test"],
+    },
+    "bgp": {
+        "path": "components/bgp-test",
+        "resources": ["bng-bgp", "frr-upstream"],
+    },
+    "failure": {
+        "path": "components/failure-test",
+        "resources": ["nexus-failure", "test-controller"],
+    },
 
     # Infrastructure
-    "infra": ["hubble-ui", "prometheus-server", "grafana"],
+    "infra": {
+        "paths": ["charts/cilium", "charts/prometheus", "charts/grafana", "clusters/local-dev/namespace-monitoring.yaml"],
+        "resources": ["hubble-ui", "prometheus-server", "grafana"],
+    },
+}
 
-    # All demos
-    "demos": ["standalone-bng", "single-bng", "single-nexus", "p2p-nexus", "distributed-bng", "distributed-nexus"],
-
-    # All tests
-    "tests": [
-        "nexus", "bng-e2e", "bngblaster", "bng-dhcp-test", "bng-wgar-test",
-        "bng-ha-test", "bng-active", "bng-standby", "bng-wifi", "bng-peer-pool",
-        "bng-radius-time", "pppoe-test", "bng-ipv6", "bng-nat", "qos-test",
-        "bng-bgp", "frr-upstream", "nexus-failure", "test-controller"
-    ],
-
-    # Everything
+# Meta groups (expand to individual groups)
+meta_groups = {
+    "demos": ["demo-a", "demo-b", "demo-c", "demo-d"],
+    "tests": ["e2e", "blaster", "blaster-test", "walled-garden", "ha-nexus", "ha-p2p",
+              "wifi", "peer-pool", "radius-time", "pppoe", "ipv6", "nat", "qos", "bgp", "failure"],
     "all": [],  # Populated below
 }
 
-# Build "all" group from all other groups
-for name, resources in groups.items():
-    if name != "all":
-        for r in resources:
-            if r not in groups["all"]:
-                groups["all"].append(r)
+# Build "all" from all groups
+for name in group_kustomizations:
+    meta_groups["all"].append(name)
 
 # Group dependencies (when starting X, also start Y)
 group_depends = {
@@ -95,7 +147,7 @@ group_depends = {
     "all": ["infra"],
 }
 
-# Resource dependencies (resource X depends on resource Y)
+# Resource dependencies (resource X depends on resource Y being ready)
 resource_depends = {
     "single-bng": ["single-nexus"],
     "distributed-bng": ["distributed-nexus"],
@@ -200,52 +252,67 @@ docker_build(
 )
 
 # =============================================================================
-# Kubernetes Resources (single kustomization - loads all manifests)
+# Determine Enabled Groups
 # =============================================================================
 
-k8s_yaml(kustomize('clusters/local-dev'))
-
-# =============================================================================
-# Resource Configuration
-# =============================================================================
-
+enabled_groups = []
 enabled_resources = []
 
-def enableResource(resource, labels):
-    """Enable a resource and configure it with labels, deps, and port forwards.
-
-    Labels come from the group name - this matches the borg pattern where
-    the group name becomes the Tilt UI label for filtering.
-    """
-    if resource in enabled_resources:
+def enable_group(group_name):
+    """Enable a group and its dependencies."""
+    if group_name in enabled_groups:
         return
-    enabled_resources.append(resource)
 
-    deps = resource_depends.get(resource, [])
-    forwards = resource_port_forwards.get(resource, [])
+    # Handle meta groups (expand to individual groups)
+    if group_name in meta_groups:
+        for sub_group in meta_groups[group_name]:
+            enable_group(sub_group)
+        return
 
-    # Handle prometheus-server rename
-    if resource == "prometheus-server":
-        k8s_resource(workload=resource, new_name="prometheus", labels=labels, resource_deps=deps, port_forwards=forwards)
-    else:
-        k8s_resource(workload=resource, labels=labels, resource_deps=deps, port_forwards=forwards)
+    # Enable group dependencies first
+    if group_name in group_depends:
+        for dep_group in group_depends[group_name]:
+            enable_group(dep_group)
+
+    # Enable this group
+    if group_name in group_kustomizations:
+        enabled_groups.append(group_name)
 
 # Process command line arguments
 for arg in cfg.get('with', []):
-    # First, enable any group dependencies
-    if arg in group_depends:
-        for dep_group in group_depends[arg]:
-            if dep_group in groups:
-                for resource in groups[dep_group]:
-                    enableResource(resource, dep_group)
+    enable_group(arg)
 
-    # Then enable the requested group
-    if arg in groups:
-        for resource in groups[arg]:
-            enableResource(resource, arg)
-    else:
-        # Assume it's a single resource name
-        enableResource(arg, arg)
+# =============================================================================
+# Apply Kustomizations for Enabled Groups Only
+# =============================================================================
+
+for group_name in enabled_groups:
+    group_config = group_kustomizations[group_name]
+
+    # Apply kustomization(s)
+    if "paths" in group_config:
+        # Multiple paths (like infra)
+        for path in group_config["paths"]:
+            if path.endswith('.yaml'):
+                k8s_yaml(path)
+            else:
+                k8s_yaml(kustomize(path))
+    elif "path" in group_config:
+        # Single path
+        k8s_yaml(kustomize(group_config["path"]))
+
+    # Configure resources
+    for resource in group_config["resources"]:
+        if resource not in enabled_resources:
+            enabled_resources.append(resource)
+
+            deps = resource_depends.get(resource, [])
+            forwards = resource_port_forwards.get(resource, [])
+
+            if resource == "prometheus-server":
+                k8s_resource(workload=resource, new_name="prometheus", labels=group_name, resource_deps=deps, port_forwards=forwards)
+            else:
+                k8s_resource(workload=resource, labels=group_name, resource_deps=deps, port_forwards=forwards)
 
 # =============================================================================
 # Verification Resources (local_resource)
@@ -380,12 +447,10 @@ curl -s http://localhost:9010/api/v1/allocations | jq '.allocations[] | {subscri
     )
 
 # =============================================================================
-# Set Enabled Resources
+# Output
 # =============================================================================
 
-config.clear_enabled_resources()
-
-if len(enabled_resources) == 0:
+if len(enabled_groups) == 0:
     print("""
 No resources specified. Available groups:
 
@@ -427,12 +492,8 @@ Usage:
   tilt up all                 # Everything
 """)
 else:
-    config.set_enabled_resources(enabled_resources)
-    print("\nEnabled resources: " + ", ".join(enabled_resources))
-
-# =============================================================================
-# Startup Message
-# =============================================================================
+    print("\nEnabled groups: " + ", ".join(enabled_groups))
+    print("Enabled resources: " + ", ".join(enabled_resources))
 
 print("""
 Observability (when infra enabled):
