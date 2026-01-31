@@ -59,7 +59,7 @@ group_kustomizations = {
     # Tests
     "e2e": {
         "path": "components/e2e-test",
-        "resources": ["nexus", "bng-e2e"],
+        "resources": ["nexus:deployment:demo-e2e", "bng-e2e"],
     },
     "blaster": {
         "path": "components/bngblaster",
@@ -79,7 +79,7 @@ group_kustomizations = {
     },
     "ha-p2p": {
         "path": "components/ha-p2p-test",
-        "resources": ["bng-active", "bng-standby"],
+        "resources": ["bng-active:pod:demo-ha-p2p", "bng-standby:pod:demo-ha-p2p"],
     },
     "wifi": {
         "path": "components/wifi-test",
@@ -160,7 +160,7 @@ group_depends = {
 resource_depends = {
     "single-bng": ["single-nexus"],
     "distributed-bng": ["distributed-nexus"],
-    "bng-e2e": ["nexus"],
+    "bng-e2e": ["nexus:deployment:demo-e2e"],
 }
 
 # Port forwards
@@ -185,7 +185,7 @@ resource_port_forwards = {
     "distributed-nexus": "9003:9000",
 
     # E2E
-    "nexus": "9010:9000",
+    "nexus:deployment:demo-e2e": "9010:9000",
 
     # Tests
     "bng-dhcp-test": "8090:8080",
@@ -452,7 +452,7 @@ curl -s http://localhost:9010/api/v1/allocations | jq '.allocations[] | {subscri
 ''',
         labels=['e2e', 'verify'],
         auto_init=False,
-        resource_deps=['nexus'],
+        resource_deps=['nexus:deployment:demo-e2e'],
     )
 
 # =============================================================================

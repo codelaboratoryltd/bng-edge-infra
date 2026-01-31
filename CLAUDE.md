@@ -180,6 +180,22 @@ The k3d cluster (`bng-edge`, context: `k3d-bng-edge`) is configured with:
 - kube-proxy replacement via eBPF
 - Prometheus and Grafana
 
+### How Tilt Works
+
+**Tilt handles Docker builds automatically** - you never need to run `docker build` manually.
+
+When you run `tilt up <group>`:
+1. Tilt watches the `src/bng/` and `src/nexus/` directories for changes
+2. When files change, Tilt automatically rebuilds the Docker images
+3. Images are pushed to the local k3d registry (`localhost:5555`)
+4. Kubernetes deployments are updated with the new image
+
+**Important**: Changes to submodules (`src/bng/`, `src/nexus/`) must be committed for Tilt to pick them up. Tilt builds from the committed state, not uncommitted local changes.
+
+To force a rebuild:
+- Make any change to a file in the submodule and save it
+- Or restart Tilt: `pkill tilt && tilt up <group>`
+
 Access after `tilt up <group>`:
 - Tilt UI: http://localhost:10350
 - Hubble UI: http://localhost:12000 (with infra)
