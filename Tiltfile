@@ -46,10 +46,10 @@ group_kustomizations = {
         "path": "components/demos/single",
         "resources": ["single-bng", "single-nexus"],
     },
-    # demo-c uses DNS-based discovery (mDNS doesn't work in k3d)
+    # demo-c uses rendezvous discovery (mDNS doesn't work in k3d)
     "demo-c": {
         "path": "components/demos/p2p-cluster",
-        "resources": ["p2p-nexus"],
+        "resources": ["p2p-nexus", "p2p-rendezvous-server"],
     },
     "demo-d": {
         "path": "components/demos/distributed",
@@ -354,10 +354,6 @@ if "p2p-nexus" in enabled_resources:
     local_resource(
         'verify-demo-c',
         cmd='''
-echo "Testing DNS-based P2P discovery..."
-echo "Checking peers on p2p-nexus-0:"
-kubectl exec -n demo-p2p p2p-nexus-0 -- curl -s localhost:9000/api/v1/status | jq -r '.peers // "no peers"'
-echo ""
 echo "Creating pool on p2p-nexus-0..."
 kubectl exec -n demo-p2p p2p-nexus-0 -- curl -s -X POST localhost:9000/api/v1/pools \
   -H "Content-Type: application/json" \
