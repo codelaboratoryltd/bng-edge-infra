@@ -11,30 +11,25 @@ bng-edge-infra/
 │   ├── staging/         # Staging cluster (Flux)
 │   └── production/      # Production cluster (Flux)
 ├── components/
-│   ├── bng/             # BNG K8s manifests
-│   ├── nexus/           # Nexus K8s manifests
-│   ├── e2e-test/        # E2E integration test (DHCP → BNG → Nexus)
-│   ├── blaster-test/    # L2 DHCP test with veth pairs
+│   ├── base/            # Reusable base components
+│   │   ├── bng/         # BNG deployment template
+│   │   ├── nexus/       # Nexus StatefulSet template
+│   │   ├── nexus-p2p/   # Nexus P2P cluster template
+│   │   └── rendezvous-server/  # P2P discovery server
+│   ├── demos/           # Demo overlays (compose base components)
+│   │   ├── standalone/  # Demo A: Standalone BNG
+│   │   ├── single/      # Demo B: BNG + Nexus
+│   │   ├── p2p-cluster/ # Demo C: 3-node Nexus P2P
+│   │   └── distributed/ # Demo D: Multi-BNG + Nexus
+│   ├── e2e-test/        # E2E integration test
 │   ├── bngblaster/      # BNG Blaster traffic generator
-│   ├── walled-garden-test/  # Subscriber lifecycle demo
-│   ├── ha-nexus-test/   # HA with shared Nexus
-│   ├── ha-p2p-test/     # HA with P2P sync
-│   ├── wifi-test/       # TTL-based lease expiration
-│   ├── peer-pool-test/  # Distributed allocation (no Nexus)
-│   ├── radius-time-test/# RADIUS-time allocation (KEY)
-│   ├── pppoe-test/      # PPPoE session lifecycle
-│   ├── ipv6-test/       # SLAAC + DHCPv6 + Prefix Delegation
-│   ├── nat-test/        # NAT44/CGNAT
-│   ├── qos-test/        # Per-subscriber rate limiting
-│   ├── failure-test/    # Resilience and failover
-│   └── bgp-test/        # BGP/FRR subscriber routes
-├── charts/              # Generated Helm templates (committed for diff visibility)
+│   └── ...              # Other test components
+├── charts/              # Generated Helm templates (Cilium, Prometheus, Grafana)
 ├── src/
 │   ├── bng/             # SUBMODULE: OLT-BNG source
 │   └── nexus/           # SUBMODULE: Nexus source
 ├── scripts/
-│   ├── helmfile.yaml    # Helm chart definitions
-│   └── hydrate.sh       # Generate manifests from Helm
+│   └── init.sh          # Create k3d cluster
 └── Tiltfile             # Local development orchestration
 ```
 
@@ -44,7 +39,7 @@ bng-edge-infra/
 
 **Required:**
 - Docker Desktop (or Podman)
-- **16GB+ RAM** for running all demos (8GB for individual demos)
+- **8GB+ RAM** for E2E demo (16GB+ for running all demos simultaneously)
 - 20GB+ disk space
 
 **Install tools (macOS):**
@@ -85,23 +80,25 @@ git submodule update --init --recursive
 
 ### Start Local Development
 
-**Option 1: Using Tilt (recommended for development)**
+**Option 1: Using Tilt (recommended)**
 ```bash
-tilt up
+./scripts/init.sh   # Create k3d cluster (first time only)
+tilt up demo-a      # Run standalone BNG demo
 ```
 
-**Option 2: Create cluster first, then Tilt**
+**Option 2: Run specific demo or test**
 ```bash
-./scripts/init.sh   # Creates k3d cluster only
-tilt up             # Installs everything else
+./scripts/init.sh   # Create k3d cluster (first time only)
+tilt up demo-b      # BNG + Nexus integration
+tilt up e2e         # E2E integration test
+tilt up demo-a demo-b infra  # Multiple groups
 ```
 
 Tilt will:
-1. Create a k3d cluster (`bng-edge`) with Cilium CNI
-2. Generate Helm templates via helmfile
-3. Install Cilium, Prometheus, Grafana, Hubble
-4. Build and deploy BNG and Nexus from submodules
-5. Set up port forwarding
+1. Install Cilium CNI (always required)
+2. Build and deploy only the selected components
+3. Set up port forwarding
+4. Enable live reload for development
 
 ### Access Services
 
@@ -122,63 +119,65 @@ The Tiltfile includes 19 demo configurations covering all BNG features.
 
 ### Core Demos (Fully Working)
 
-| Demo | Flag | Description | Port |
-|------|------|-------------|------|
-| **A: Standalone** | `--demo=a` | Single BNG with local pool | 8080 |
-| **B: Single Nexus** | `--demo=b` | BNG + single Nexus server | 8081/9001 |
-| **C: P2P Cluster** | `--demo=c` | 3-node Nexus P2P cluster | 9002 |
-| **D: Distributed** | `--demo=d` | Multi-BNG + Nexus integration | 8083/9003 |
+| Demo | Command | Description | Port |
+|------|---------|-------------|------|
+| **A: Standalone** | `tilt up demo-a` | Single BNG with local pool | 8080 |
+| **B: Single Nexus** | `tilt up demo-b` | BNG + single Nexus server | 8081/9001 |
+| **C: P2P Cluster** | `tilt up demo-c` | 3-node Nexus P2P cluster | 9002 |
+| **D: Distributed** | `tilt up demo-d` | Multi-BNG + Nexus integration | 8083/9003 |
 
 ### Integration Tests
 
-| Demo | Flag | Description | Port |
-|------|------|-------------|------|
-| **E2E** | `--demo=e2e` | Real DHCP → BNG → Nexus flow | 9010 |
-| **Blaster-Test** | `--demo=blaster-test` | L2 DHCP with veth pairs | 8090 |
-| **Walled Garden** | `--demo=walled-garden` | Unknown → WalledGarden → Production | 9011 |
+| Test | Command | Description | Port |
+|------|---------|-------------|------|
+| **E2E** | `tilt up e2e` | Real DHCP → BNG → Nexus flow | 9010 |
+| **Blaster** | `tilt up blaster` | BNG Blaster traffic generator | - |
+| **Blaster-Test** | `tilt up blaster-test` | L2 DHCP with veth pairs | 8090 |
+| **Walled Garden** | `tilt up walled-garden` | Unknown → WalledGarden → Production | 9011 |
 
 ### High Availability
 
-| Demo | Flag | Description | Port |
-|------|------|-------------|------|
-| **HA-Nexus** | `--demo=ha-nexus` | Two BNGs + shared Nexus | 9012 |
-| **HA-P2P** | `--demo=ha-p2p` | Active/Standby with SSE sync | 8088/8089 |
-| **Failure** | `--demo=failure` | Resilience and failover testing | - |
+| Test | Command | Description | Port |
+|------|---------|-------------|------|
+| **HA-Nexus** | `tilt up ha-nexus` | Two BNGs + shared Nexus | 9012 |
+| **HA-P2P** | `tilt up ha-p2p` | Active/Standby with SSE sync | 8088/8089 |
+| **Failure** | `tilt up failure` | Resilience and failover testing | - |
 
 ### Distributed Allocation
 
-| Demo | Flag | Description | Port |
-|------|------|-------------|------|
-| **WiFi** | `--demo=wifi` | TTL-based lease expiration (EpochBitmap) | 8092 |
-| **Peer-Pool** | `--demo=peer-pool` | Hashring coordination, no Nexus | 8093 |
-| **RADIUS-Time** | `--demo=radius-time` | **KEY**: IP pre-allocated before DHCP | 8094 |
+| Test | Command | Description | Port |
+|------|---------|-------------|------|
+| **WiFi** | `tilt up wifi` | TTL-based lease expiration (EpochBitmap) | 8092 |
+| **Peer-Pool** | `tilt up peer-pool` | Hashring coordination, no Nexus | 8093 |
+| **RADIUS-Time** | `tilt up radius-time` | **KEY**: IP pre-allocated before DHCP | 8094 |
 
 ### Protocol Features
 
-> These demos exercise BNG protocol features with test configurations.
-
-| Demo | Flag | Description | Port | Status |
-|------|------|-------------|------|--------|
-| **PPPoE** | `--demo=pppoe` | Full PPPoE lifecycle (PADI→IPCP) | 8095 | Config Ready |
-| **IPv6** | `--demo=ipv6` | SLAAC + DHCPv6 + Prefix Delegation | 8096 | Config Ready |
-| **NAT** | `--demo=nat` | CGNAT with port blocks, hairpinning | 8097 | Config Ready |
-| **QoS** | `--demo=qos` | Per-subscriber rate limiting | 8098 | Config Ready |
-| **BGP** | `--demo=bgp` | FRR peering + subscriber routes | 8099 | **Working** |
+| Test | Command | Description | Port |
+|------|---------|-------------|------|
+| **PPPoE** | `tilt up pppoe` | Full PPPoE lifecycle (PADI→IPCP) | 8095 |
+| **IPv6** | `tilt up ipv6` | SLAAC + DHCPv6 + Prefix Delegation | 8096 |
+| **NAT** | `tilt up nat` | CGNAT with port blocks, hairpinning | 8097 |
+| **QoS** | `tilt up qos` | Per-subscriber rate limiting | 8098 |
+| **BGP** | `tilt up bgp` | FRR peering + subscriber routes | 8099 |
 
 ### Running Demos
 
 ```bash
-# Run a specific demo (recommended)
-tilt up -- --demo=radius-time
-
-# Run all demos (requires 16GB+ RAM)
+# Show available groups
 tilt up
 
-# Run multiple demos
-tilt up -- --demo=e2e --demo=ha-p2p
+# Run a specific demo
+tilt up demo-a
+
+# Run multiple groups
+tilt up demo-a demo-b infra
+
+# Run all demos (requires significant resources)
+tilt up all
 ```
 
-> **Note**: Running all demos simultaneously (`tilt up` without flags) requires significant resources. For testing or development, select specific demos with `--demo=<name>`.
+> **Note**: Running `tilt up` without arguments shows available groups. Running all demos simultaneously requires significant resources (~50+ pods).
 
 Each demo has test buttons in the Tilt UI (http://localhost:10350). Click to run tests interactively.
 

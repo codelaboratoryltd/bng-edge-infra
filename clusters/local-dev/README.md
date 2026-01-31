@@ -6,7 +6,7 @@ k3d-based local Kubernetes cluster with Cilium CNI for BNG development.
 
 - **Cluster name**: `bng-edge` (Kubernetes context: `k3d-bng-edge`)
 - **CNI**: Cilium (Flannel disabled)
-- **Nodes**: 1 server, 2 agents
+- **Nodes**: 1 server, 1 agent
 - **Registry**: `localhost:5555` (k3d-bng-edge-registry)
 - **k3s version**: v1.28.5
 

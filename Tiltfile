@@ -7,7 +7,7 @@
 #   tilt up                          # Nothing enabled (shows available groups)
 #   tilt up demo-a                   # Standalone BNG only
 #   tilt up demo-b                   # Single integration (BNG + Nexus)
-#   tilt up demo-c                   # P2P cluster (3 Nexus)
+#   tilt up demo-c                   # P2P cluster (3 Nexus, DNS discovery)
 #   tilt up demo-d                   # Distributed (3 Nexus + 2 BNG)
 #   tilt up e2e                      # E2E integration test
 #   tilt up demo-a demo-b            # Multiple groups
@@ -46,6 +46,7 @@ group_kustomizations = {
         "path": "components/demos/single",
         "resources": ["single-bng", "single-nexus"],
     },
+    # demo-c uses DNS-based discovery (mDNS doesn't work in k3d)
     "demo-c": {
         "path": "components/demos/p2p-cluster",
         "resources": ["p2p-nexus"],
@@ -117,12 +118,20 @@ group_kustomizations = {
         "resources": ["nexus-failure", "test-controller"],
     },
 
-    # Infrastructure
+    # Infrastructure (observability - optional)
     "infra": {
-        "paths": ["charts/cilium", "charts/prometheus", "charts/grafana", "clusters/local-dev/namespace-monitoring.yaml"],
+        "paths": ["charts/prometheus", "charts/grafana", "clusters/local-dev/namespace-monitoring.yaml"],
         "resources": ["hubble-ui", "prometheus-server", "grafana"],
     },
 }
+
+# =============================================================================
+# Required Infrastructure (Cilium CNI - always installed)
+# =============================================================================
+
+# Cilium is required for the cluster to function (provides CNI)
+# This is NOT optional - without it, nodes stay NotReady
+k8s_yaml(kustomize('charts/cilium'))
 
 # Meta groups (expand to individual groups)
 meta_groups = {
@@ -168,7 +177,7 @@ resource_port_forwards = {
     "single-bng": "8081:8080",
     "single-nexus": "9001:9000",
 
-    # Demo C
+    # Demo C (DNS-based discovery)
     "p2p-nexus": "9002:9000",
 
     # Demo D
@@ -345,6 +354,10 @@ if "p2p-nexus" in enabled_resources:
     local_resource(
         'verify-demo-c',
         cmd='''
+echo "Testing DNS-based P2P discovery..."
+echo "Checking peers on p2p-nexus-0:"
+kubectl exec -n demo-p2p p2p-nexus-0 -- curl -s localhost:9000/api/v1/status | jq -r '.peers // "no peers"'
+echo ""
 echo "Creating pool on p2p-nexus-0..."
 kubectl exec -n demo-p2p p2p-nexus-0 -- curl -s -X POST localhost:9000/api/v1/pools \
   -H "Content-Type: application/json" \
@@ -457,7 +470,7 @@ No resources specified. Available groups:
   Demos:
     demo-a          Standalone BNG (no Nexus)
     demo-b          Single integration (1 BNG + 1 Nexus)
-    demo-c          P2P cluster (3 Nexus)
+    demo-c          P2P cluster (3 Nexus, DNS discovery)
     demo-d          Distributed (3 Nexus + 2 BNG)
     demos           All demos
 

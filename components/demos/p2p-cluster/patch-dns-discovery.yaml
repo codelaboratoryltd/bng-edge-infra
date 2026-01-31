@@ -1,0 +1,44 @@
+# P2P discovery using Kubernetes headless service DNS
+# This is a simpler alternative to rendezvous discovery that doesn't require a separate server.
+# The headless service (clusterIP: None) returns all pod IPs when queried.
+# Nexus pods periodically resolve the DNS name to discover peers.
+#
+# Requirements:
+# - Headless service (already configured in base/nexus-p2p/service.yaml)
+# - All pods must be in the same namespace
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: nexus
+spec:
+  template:
+    spec:
+      containers:
+        - name: nexus
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            # DNS discovery configuration
+            # The service name is constructed as: <service>.<namespace>.svc.cluster.local
+            - name: NEXUS_DISCOVERY
+              value: "dns"
+            - name: NEXUS_DNS_SERVICE_NAME
+              value: "p2p-nexus.demo-p2p.svc.cluster.local"
+          # Readiness probe uses the /ready endpoint which checks peer discovery status
+          # Pod will not be marked ready until either:
+          # 1. At least one peer is discovered, OR
+          # 2. The ready timeout is reached (30s default, for first node)
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 9000
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            # Allow more failures since we wait for peer discovery
+            failureThreshold: 10
