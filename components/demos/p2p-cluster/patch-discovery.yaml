@@ -1,0 +1,50 @@
+# P2P discovery using rendezvous server
+# The rendezvous server provides peer discovery in environments where mDNS doesn't work (k3d, Kubernetes)
+# The rendezvous server publishes its multiaddr to a ConfigMap that nexus pods read from
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: nexus
+spec:
+  template:
+    spec:
+      initContainers:
+        - name: wait-for-rendezvous
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              echo "Waiting for rendezvous server ConfigMap to be populated..."
+              while true; do
+                # Read the ConfigMap value
+                MULTIADDR=$(cat /config/RENDEZVOUS_MULTIADDR 2>/dev/null || echo "")
+                if [ -n "$MULTIADDR" ] && [ "$MULTIADDR" != "" ]; then
+                  echo "Rendezvous multiaddr found: $MULTIADDR"
+                  break
+                fi
+                echo "ConfigMap not yet populated, waiting..."
+                sleep 5
+              done
+          volumeMounts:
+            - name: rendezvous-config
+              mountPath: /config
+      containers:
+        - name: nexus
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            # Rendezvous discovery configuration from ConfigMap
+            - name: NEXUS_RENDEZVOUS_SERVER
+              valueFrom:
+                configMapKeyRef:
+                  name: p2p-rendezvous-config
+                  key: RENDEZVOUS_MULTIADDR
+            - name: NEXUS_RENDEZVOUS_NAMESPACE
+              value: "nexus"
+      volumes:
+        - name: rendezvous-config
+          configMap:
+            name: p2p-rendezvous-config

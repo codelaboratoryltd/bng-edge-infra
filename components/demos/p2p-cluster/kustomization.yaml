@@ -1,14 +1,16 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
-# Demo C: Nexus P2P Cluster (3 Nexus with mDNS discovery)
+# Demo C: Nexus P2P Cluster (3 Nexus with rendezvous discovery)
 # Demonstrates CRDT synchronization and hashring-based allocation
+# Uses rendezvous server for peer discovery in k3d where mDNS doesn't work
 
 namespace: demo-p2p
 
 resources:
   - namespace.yaml
   - ../../base/nexus-p2p
+  - ../../base/rendezvous-server
 
 namePrefix: p2p-
 
@@ -20,3 +22,6 @@ labels:
 replicas:
   - name: nexus
     count: 3
+
+patches:
+  - path: patch-discovery.yaml
