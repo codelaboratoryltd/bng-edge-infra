@@ -5,6 +5,9 @@ kind: Service
 metadata:
   name: cilium-agent
   namespace: kube-system
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "9964"
   labels:
     k8s-app: cilium
     app.kubernetes.io/name: cilium-agent
@@ -15,10 +18,6 @@ spec:
   selector:
     k8s-app: cilium
   ports:
-  - name: metrics
-    port: 9962
-    protocol: TCP
-    targetPort: prometheus
   - name: envoy-metrics
     port: 9964
     protocol: TCP

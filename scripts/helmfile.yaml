@@ -36,8 +36,7 @@ releases:
         prometheus:
           enabled: true
           serviceMonitor:
-            enabled: true
-            trustCRDsExist: true
+            enabled: false  # Disable ServiceMonitor - we don't use Prometheus Operator
 
         # Operator configuration
         operator:

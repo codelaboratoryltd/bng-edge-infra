@@ -8,7 +8,6 @@ resources:
   - templates/cilium-agent/rolebinding.yaml
   - templates/cilium-agent/service.yaml
   - templates/cilium-agent/serviceaccount.yaml
-  - templates/cilium-agent/servicemonitor.yaml
   - templates/cilium-ca-secret.yaml
   - templates/cilium-configmap.yaml
   - templates/cilium-operator/clusterrole.yaml

@@ -4,7 +4,7 @@ kind: Simple
 metadata:
   name: bng-edge
 servers: 1
-agents: 2
+agents: 1
 image: rancher/k3s:v1.28.5-k3s1  # Specify k3s version for consistency
 ports:
   # HTTP/HTTPS for services
