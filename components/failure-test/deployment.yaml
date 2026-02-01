@@ -102,8 +102,8 @@ data:
     done
 
     echo "Waiting for BNG nodes..."
-    timeout 120 sh -c 'until wget -q -O- http://bng-active:8080/health 2>/dev/null | grep -q healthy; do sleep 2; done' || true
-    timeout 120 sh -c 'until wget -q -O- http://bng-standby:8080/health 2>/dev/null | grep -q healthy; do sleep 2; done' || true
+    timeout 120 sh -c 'until wget -q -O- http://bng-active:9090/health 2>/dev/null | grep -q healthy; do sleep 2; done' || true
+    timeout 120 sh -c 'until wget -q -O- http://bng-standby:9090/health 2>/dev/null | grep -q healthy; do sleep 2; done' || true
 
     echo "Cluster ready!"
     echo ""
@@ -350,7 +350,7 @@ data:
     echo "  Simulating by checking partition detection mechanism..."
 
     # Check if partition detection is working
-    HEALTH_CHECK=$(wget -q -O- "http://bng-active:8080/health" 2>&1 || echo "{}")
+    HEALTH_CHECK=$(wget -q -O- "http://bng-active:9090/health" 2>&1 || echo "{}")
     echo "  Health check response: $HEALTH_CHECK"
 
     # Step 3: Verify system enters degraded mode

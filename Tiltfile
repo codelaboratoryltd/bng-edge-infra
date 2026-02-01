@@ -455,6 +455,50 @@ curl -s http://localhost:9010/api/v1/allocations | jq '.allocations[] | {subscri
         resource_deps=['nexus:deployment:demo-e2e'],
     )
 
+if "bng-nat" in enabled_resources:
+    local_resource(
+        'verify-nat',
+        cmd='''
+echo "============================================"
+echo "       NAT44/CGNAT Test Suite"
+echo "============================================"
+echo ""
+echo "Step 1: Checking BNG NAT health..."
+if curl -sf http://localhost:8097/health > /dev/null 2>&1; then
+  echo "  BNG NAT is healthy"
+else
+  echo "  WARNING: BNG NAT health check failed (API may not support /health)"
+fi
+echo ""
+echo "Step 2: Running NAT tests from client-1..."
+kubectl exec -n demo-nat bng-nat -c client-1 -- sh -c '
+  # Install tools if needed
+  apk add --no-cache curl wget 2>/dev/null || true
+
+  echo "Testing connectivity to external server via NAT..."
+
+  # Test basic NAT translation
+  if wget -q -O- --timeout=5 http://203.0.113.100:8080/test 2>/dev/null; then
+    echo ""
+    echo "SUCCESS: NAT translation working!"
+  else
+    echo "  External server not reachable (NAT may need configuration)"
+  fi
+
+  echo ""
+  echo "Getting client source IP as seen by external server..."
+  wget -q -O- --timeout=5 http://203.0.113.100:8080/myip 2>/dev/null || echo "(Could not reach external server)"
+'
+echo ""
+echo "Step 3: Checking NAT sessions..."
+curl -s http://localhost:8097/api/v1/nat/sessions 2>/dev/null | head -20 || echo "(NAT sessions API may not be implemented yet)"
+echo "============================================"
+''',
+        labels=['nat', 'verify'],
+        auto_init=False,
+        resource_deps=['bng-nat'],
+    )
+
 # =============================================================================
 # Output
 # =============================================================================

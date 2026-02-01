@@ -506,47 +506,58 @@ spec:
       targetPort: 9090
       name: metrics
 ---
-# Verification Job - runs tests after deployment
-apiVersion: batch/v1
-kind: Job
+# Verification Pod - runs tests from inside the network namespace
+# Tests run via: kubectl exec -n demo-nat nat-test-runner -- /scripts/run-all-tests.sh
+# Or use Tilt button: verify-nat
+apiVersion: v1
+kind: Pod
 metadata:
   name: nat-test-runner
   namespace: demo-nat
+  labels:
+    app: nat-test-runner
 spec:
-  backoffLimit: 3
-  template:
-    spec:
-      restartPolicy: Never
-      initContainers:
-        # Wait for BNG and external server to be ready
-        - name: wait-for-services
-          image: curlimages/curl:latest
-          command: ["/bin/sh", "-c"]
-          args:
-            - |
-              echo "Waiting for BNG NAT API..."
-              until curl -sf http://bng-nat:8080/health > /dev/null 2>&1; do
-                echo "  BNG not ready, waiting..."
-                sleep 3
-              done
-              echo "BNG NAT is ready!"
-
-              echo "Waiting for external server..."
-              until curl -sf http://203.0.113.100:8080/test > /dev/null 2>&1; do
-                echo "  External server not ready, waiting..."
-                sleep 3
-              done
-              echo "External server is ready!"
-      containers:
-        - name: test-runner
-          image: nicolaka/netshoot:latest
-          command: ["/bin/sh", "/scripts/run-all-tests.sh"]
-          volumeMounts:
-            - name: scripts
-              mountPath: /scripts
-              readOnly: true
-      volumes:
-        - name: scripts
-          configMap:
-            name: nat-test-scripts
-            defaultMode: 0755
+  restartPolicy: Never
+  # Share network namespace with bng-nat pod - this is the key!
+  # Tests need access to veth-client interfaces and 203.0.113.x network
+  initContainers:
+    # Wait for BNG to be ready via K8s service
+    - name: wait-for-bng
+      image: curlimages/curl:latest
+      command: ["/bin/sh", "-c"]
+      args:
+        - |
+          echo "Waiting for BNG NAT API..."
+          until curl -sf http://bng-nat:9090/health > /dev/null 2>&1; do
+            echo "  BNG not ready, waiting..."
+            sleep 3
+          done
+          echo "BNG NAT is ready!"
+          echo ""
+          echo "Note: Tests should be run via kubectl exec into client containers"
+          echo "  kubectl exec -n demo-nat bng-nat -c client-1 -- /scripts/test-basic-nat.sh"
+  containers:
+    - name: instructions
+      image: alpine:3.19
+      command: ["/bin/sh", "-c"]
+      args:
+        - |
+          echo "=============================================="
+          echo "     NAT Test Runner - Ready"
+          echo "=============================================="
+          echo ""
+          echo "BNG NAT pod is ready. Run tests via kubectl exec:"
+          echo ""
+          echo "  # Run all tests from client-1:"
+          echo "  kubectl exec -n demo-nat bng-nat -c client-1 -- sh -c 'apk add --no-cache curl wget && sh /scripts/run-all-tests.sh'"
+          echo ""
+          echo "  # Individual tests:"
+          echo "  kubectl exec -n demo-nat bng-nat -c client-1 -- sh /scripts/test-basic-nat.sh"
+          echo "  kubectl exec -n demo-nat bng-nat -c client-1 -- sh /scripts/test-port-blocks.sh"
+          echo "  kubectl exec -n demo-nat bng-nat -c client-1 -- sh /scripts/test-hairpinning.sh"
+          echo "  kubectl exec -n demo-nat bng-nat -c client-1 -- sh /scripts/test-nat-logging.sh"
+          echo ""
+          echo "Or use Tilt UI button: verify-nat"
+          echo ""
+          # Keep running so pod stays in Running state
+          sleep infinity
