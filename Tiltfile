@@ -59,7 +59,7 @@ group_kustomizations = {
     # Tests
     "e2e": {
         "path": "components/e2e-test",
-        "resources": ["nexus:deployment:demo-e2e", "bng-e2e"],
+        "resources": ["nexus", "bng-e2e"],
     },
     "blaster": {
         "path": "components/bngblaster",
@@ -160,7 +160,7 @@ group_depends = {
 resource_depends = {
     "single-bng": ["single-nexus"],
     "distributed-bng": ["distributed-nexus"],
-    "bng-e2e": ["nexus:deployment:demo-e2e"],
+    "bng-e2e": ["nexus"],
 }
 
 # Port forwards
@@ -185,7 +185,7 @@ resource_port_forwards = {
     "distributed-nexus": "9003:9000",
 
     # E2E
-    "nexus:deployment:demo-e2e": "9010:9000",
+    "nexus": "9010:9000",
 
     # Tests
     "bng-dhcp-test": "8090:8080",
@@ -442,7 +442,7 @@ echo "============================================"
     )
 
     local_resource(
-        'e2e-nexus-state',
+        'nexus-state',
         cmd='''
 echo "=== Nexus State ==="
 echo "Pools:"
@@ -452,7 +452,7 @@ curl -s http://localhost:9010/api/v1/allocations | jq '.allocations[] | {subscri
 ''',
         labels=['e2e', 'verify'],
         auto_init=False,
-        resource_deps=['nexus:deployment:demo-e2e'],
+        resource_deps=['nexus'],
     )
 
 if "bng-nat" in enabled_resources:
