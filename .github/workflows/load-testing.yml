@@ -68,7 +68,7 @@ jobs:
           echo '```' >> $GITHUB_STEP_SUMMARY
 
       - name: Upload benchmark results
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: benchmark-results
           path: src/bng/benchmark-results.txt
@@ -136,7 +136,7 @@ jobs:
           ./bin/dhcp-loadtest -h
 
       - name: Upload load test tool
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: dhcp-loadtest-linux-amd64
           path: src/bng/bin/dhcp-loadtest
