@@ -9,7 +9,7 @@ on:
     branches: [main]
 
 env:
-  GO_VERSION: "1.23"
+  GO_VERSION: "1.25"
 
 jobs:
   # ===========================================================================
@@ -114,7 +114,8 @@ jobs:
             llvm \
             libbpf-dev \
             linux-headers-generic \
-            linux-tools-generic
+            linux-tools-generic \
+            gcc-multilib
 
       - name: Build eBPF programs
         working-directory: src/bng/bpf
