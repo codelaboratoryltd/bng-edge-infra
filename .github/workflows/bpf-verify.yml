@@ -1,0 +1,91 @@
+# BPF Kernel Verification Pipeline
+# Verifies that all eBPF programs pass the kernel BPF verifier
+# across multiple kernel versions using Cilium's Little VM Helper (LVH).
+name: BPF Kernel Verify
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/bng/bpf/**"
+      - "src/bng/cmd/verify-bpf/**"
+      - "src/bng/Dockerfile"
+      - ".github/workflows/bpf-verify.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "src/bng/bpf/**"
+      - "src/bng/cmd/verify-bpf/**"
+      - "src/bng/Dockerfile"
+      - ".github/workflows/bpf-verify.yml"
+
+jobs:
+  # Build the static verify-bpf binary with embedded .bpf.o files
+  build:
+    name: Build verify-bpf
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build verify stage
+        uses: docker/build-push-action@v6
+        with:
+          context: src/bng
+          target: verify
+          load: true
+          tags: bng-verify:local
+          cache-from: type=gha,scope=bpf-verify
+          cache-to: type=gha,scope=bpf-verify,mode=max
+
+      - name: Extract verify-bpf binary
+        run: |
+          docker create --name extract bng-verify:local
+          docker cp extract:/verify-bpf verify-bpf
+          docker rm extract
+          chmod +x verify-bpf
+
+      - name: Upload verify-bpf artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: verify-bpf
+          path: verify-bpf
+
+  # Run the verifier on multiple kernel versions via LVH
+  verify:
+    name: "Verify (kernel ${{ matrix.kernel }})"
+    runs-on: ubuntu-24.04
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        kernel:
+          - "5.15-20260209.013541"
+          - "6.1-20260209.013541"
+          - "6.6-20260209.013541"
+          - "6.12-20260209.013541"
+          - "6.18-20260209.013541"
+    steps:
+      - name: Download verify-bpf artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: verify-bpf
+
+      - name: Make binary executable
+        run: chmod +x verify-bpf
+
+      - name: Run BPF verifier in LVH
+        uses: cilium/little-vm-helper@v0.0.28
+        with:
+          test-name: "bpf-verify-${{ matrix.kernel }}"
+          image: "complexity-test"
+          image-version: "${{ matrix.kernel }}"
+          install-dependencies: "true"
+          host-mount: ./
+          cmd: |
+            /host/verify-bpf
