@@ -174,7 +174,7 @@ jobs:
             jq
 
       - name: Download x86_64 artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: ebpf-programs-x86_64
           path: src/bng/bpf/
@@ -292,7 +292,7 @@ jobs:
             jq
 
       - name: Download x86_64 artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: ebpf-programs-x86_64
           path: src/bng/bpf/
