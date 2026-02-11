@@ -19,9 +19,20 @@ spec:
         prometheus.io/port: "9002"
         prometheus.io/path: "/metrics"
     spec:
+      serviceAccountName: nexus
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
       containers:
         - name: nexus
           image: ghcr.io/codelaboratoryltd/nexus:latest
+          imagePullPolicy: Always
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
           args:
             - serve
             - --http-port=9000

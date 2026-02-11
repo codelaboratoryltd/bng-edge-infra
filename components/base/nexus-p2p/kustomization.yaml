@@ -4,6 +4,8 @@ kind: Kustomization
 resources:
   - statefulset.yaml
   - service.yaml
+  - rbac.yaml
+  - pdb.yaml
 
 labels:
   - pairs:
