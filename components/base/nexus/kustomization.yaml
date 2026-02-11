@@ -4,6 +4,7 @@ kind: Kustomization
 resources:
   - statefulset.yaml
   - service.yaml
+  - rbac.yaml
 
 labels:
   - pairs:

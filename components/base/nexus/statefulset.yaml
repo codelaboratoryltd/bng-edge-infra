@@ -19,6 +19,7 @@ spec:
         prometheus.io/port: "9002"
         prometheus.io/path: "/metrics"
     spec:
+      serviceAccountName: nexus
       containers:
         - name: nexus
           image: ghcr.io/codelaboratoryltd/nexus:latest

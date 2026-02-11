@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: nexus
+  labels:
+    app: nexus
+automountServiceAccountToken: false

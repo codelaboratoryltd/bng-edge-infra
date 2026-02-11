@@ -18,6 +18,7 @@ spec:
         prometheus.io/port: "9090"
         prometheus.io/path: "/metrics"
     spec:
+      serviceAccountName: bng
       containers:
         - name: bng
           image: ghcr.io/codelaboratoryltd/bng:latest
