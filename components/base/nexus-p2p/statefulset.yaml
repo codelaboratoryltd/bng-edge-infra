@@ -27,6 +27,7 @@ spec:
       containers:
         - name: nexus
           image: ghcr.io/codelaboratoryltd/nexus:latest
+          imagePullPolicy: Always
           securityContext:
             readOnlyRootFilesystem: true
             allowPrivilegeEscalation: false

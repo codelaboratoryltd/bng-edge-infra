@@ -26,6 +26,7 @@ spec:
       containers:
         - name: bng
           image: ghcr.io/codelaboratoryltd/bng:latest
+          imagePullPolicy: Always
           securityContext:
             readOnlyRootFilesystem: true
             allowPrivilegeEscalation: false
