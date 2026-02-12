@@ -369,10 +369,14 @@ for group_name in enabled_groups:
             deps = resource_depends.get(resource, [])
             forwards = resource_port_forwards.get(resource, [])
 
-            if resource == "prometheus-server":
-                k8s_resource(workload=resource, new_name="prometheus", labels=group_name, resource_deps=deps, port_forwards=forwards)
+            # Support qualified name:kind:namespace selectors — extract
+            # the workload name (first component) for k8s_resource().
+            workload_name = resource.split(":")[0]
+
+            if workload_name == "prometheus-server":
+                k8s_resource(workload=workload_name, new_name="prometheus", labels=group_name, resource_deps=deps, port_forwards=forwards)
             else:
-                k8s_resource(workload=resource, labels=group_name, resource_deps=deps, port_forwards=forwards)
+                k8s_resource(workload=workload_name, labels=group_name, resource_deps=deps, port_forwards=forwards)
 
 # =============================================================================
 # Verification Resources (local_resource)
