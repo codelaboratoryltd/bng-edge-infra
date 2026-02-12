@@ -1,5 +1,11 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
+# HA P2P test: Active/Standby BNG pair with direct session sync
 resources:
   - deployment.yaml
+
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: bng-edge
+      app.kubernetes.io/component: ha-p2p-test

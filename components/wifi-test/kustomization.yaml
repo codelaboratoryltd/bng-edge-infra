@@ -1,5 +1,11 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
+# WiFi TTL lease mode test: epoch-based IP allocation with auto-expiration
 resources:
   - deployment.yaml
+
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: bng-edge
+      app.kubernetes.io/component: wifi-test

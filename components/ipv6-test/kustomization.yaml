@@ -1,5 +1,11 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
+# IPv6 test: SLAAC + DHCPv6 address assignment + prefix delegation
 resources:
   - deployment.yaml
+
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: bng-edge
+      app.kubernetes.io/component: ipv6-test
