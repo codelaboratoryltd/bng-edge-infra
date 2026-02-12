@@ -24,6 +24,7 @@ bng-edge-infra/
 │   ├── e2e-test/        # E2E integration test
 │   ├── bngblaster/      # BNG Blaster traffic generator
 │   └── ...              # Other test components
+├── docs/                # Documentation (configuration, metrics, troubleshooting)
 ├── charts/              # Generated Helm templates (Cilium, Prometheus, Grafana)
 ├── src/
 │   ├── bng/             # SUBMODULE: OLT-BNG source
@@ -113,11 +114,10 @@ Tilt will:
 
 ## Demo Scenarios
 
-The Tiltfile includes 19 demo configurations covering all BNG features.
+The Tiltfile includes 19 demo/test configurations covering all BNG features.
+All core BNG features (PPPoE, NAT44/CGNAT, IPv6, BGP, HA) are implemented in BNG v0.2.0.
 
-> **Note**: Some advanced demos (PPPoE, NAT, BGP) require features that are still being implemented in the BNG. These demos have placeholder configurations ready for when the features are complete.
-
-### Core Demos (Fully Working)
+### Core Demos
 
 | Demo | Command | Description | Port |
 |------|---------|-------------|------|
@@ -133,14 +133,14 @@ The Tiltfile includes 19 demo configurations covering all BNG features.
 | **E2E** | `tilt up e2e` | Real DHCP → BNG → Nexus flow | 9010 |
 | **Blaster** | `tilt up blaster` | BNG Blaster traffic generator | - |
 | **Blaster-Test** | `tilt up blaster-test` | L2 DHCP with veth pairs | 8090 |
-| **Walled Garden** | `tilt up walled-garden` | Unknown → WalledGarden → Production | 9011 |
+| **Walled Garden** | `tilt up walled-garden` | Unknown → WalledGarden → Production | - |
 
 ### High Availability
 
 | Test | Command | Description | Port |
 |------|---------|-------------|------|
-| **HA-Nexus** | `tilt up ha-nexus` | Two BNGs + shared Nexus | 9012 |
-| **HA-P2P** | `tilt up ha-p2p` | Active/Standby with SSE sync | 8088/8089 |
+| **HA-Nexus** | `tilt up ha-nexus` | Two BNGs + shared Nexus | - |
+| **HA-P2P** | `tilt up ha-p2p` | Active/Standby with SSE sync | - |
 | **Failure** | `tilt up failure` | Resilience and failover testing | - |
 
 ### Distributed Allocation
@@ -231,6 +231,14 @@ Reset the cluster:
 k3d cluster delete bng-edge
 tilt up
 ```
+
+## Documentation
+
+| Document | Description |
+|----------|-------------|
+| [Configuration Reference](docs/configuration.md) | All CLI flags for BNG and Nexus, grouped by feature area |
+| [Metrics Reference](docs/metrics.md) | All Prometheus metrics with types, labels, and example PromQL queries |
+| [Troubleshooting Guide](docs/troubleshooting.md) | Structured troubleshooting for eBPF, DHCP, Nexus, Kubernetes, and HA issues |
 
 ## Application Repos
 
