@@ -1,0 +1,23 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Demo H: HA Pair (Active/Standby failover)
+# Two BNG instances with shared Nexus state, one active and one standby
+# Active serves traffic, standby takes over on failure
+
+namespace: demo-ha-pair
+
+resources:
+  - namespace.yaml
+  - ../../base/nexus
+  - bng-active.yaml
+  - bng-standby.yaml
+
+namePrefix: ha-
+
+labels:
+  - pairs:
+      demo: ha-pair
+
+patches:
+  - path: patch-nexus.yaml

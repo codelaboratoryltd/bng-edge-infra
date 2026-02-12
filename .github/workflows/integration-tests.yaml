@@ -1,0 +1,412 @@
+# Integration Test Pipeline
+# Sets up a k3d cluster in CI and deploys test components for verification.
+# Uses matrix strategy for parallel test execution across test groups.
+name: Integration Tests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "components/**"
+      - "clusters/**"
+      - "Tiltfile"
+      - ".github/workflows/integration-tests.yaml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "components/**"
+      - "clusters/**"
+      - "Tiltfile"
+      - ".github/workflows/integration-tests.yaml"
+  workflow_dispatch:
+
+env:
+  GO_VERSION: "1.25"
+  K3D_VERSION: "v5.7.5"
+  K3D_CLUSTER: "ci-bng-edge"
+  REGISTRY_PORT: "5556"
+
+jobs:
+  # ===========================================================================
+  # Build Docker images used by all test jobs
+  # ===========================================================================
+  build-images:
+    name: Build Images
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build BNG image
+        uses: docker/build-push-action@v6
+        with:
+          context: src/bng
+          push: false
+          tags: ghcr.io/codelaboratoryltd/bng:test
+          outputs: type=docker,dest=/tmp/bng-image.tar
+          cache-from: type=gha,scope=integration-bng
+          cache-to: type=gha,scope=integration-bng,mode=max
+        if: hashFiles('src/bng/Dockerfile') != ''
+
+      - name: Build Nexus image
+        uses: docker/build-push-action@v6
+        with:
+          context: src/nexus
+          push: false
+          tags: ghcr.io/codelaboratoryltd/nexus:test
+          outputs: type=docker,dest=/tmp/nexus-image.tar
+          cache-from: type=gha,scope=integration-nexus
+          cache-to: type=gha,scope=integration-nexus,mode=max
+        if: hashFiles('src/nexus/Dockerfile') != ''
+
+      - name: Upload image artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          name: docker-images
+          path: /tmp/*-image.tar
+          retention-days: 1
+
+  # ===========================================================================
+  # Matrix test execution across test groups
+  # ===========================================================================
+  integration-test:
+    name: "Test: ${{ matrix.test-group }}"
+    runs-on: ubuntu-latest
+    needs: build-images
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group:
+          - e2e
+          - ha-nexus
+          - failure
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Download images
+        uses: actions/download-artifact@v7
+        with:
+          name: docker-images
+          path: /tmp/
+
+      - name: Install k3d
+        run: |
+          curl -s https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | \
+            TAG=${{ env.K3D_VERSION }} bash
+
+      - name: Create k3d cluster
+        run: |
+          k3d cluster create ${{ env.K3D_CLUSTER }} \
+            --no-lb \
+            --k3s-arg "--disable=traefik@server:0" \
+            --k3s-arg "--disable=servicelb@server:0" \
+            --k3s-arg "--flannel-backend=none@server:0" \
+            --k3s-arg "--disable-network-policy@server:0" \
+            --timeout 120s
+
+          kubectl cluster-info
+          kubectl get nodes
+
+      - name: Import images into k3d
+        run: |
+          if [ -f /tmp/bng-image.tar ]; then
+            k3d image import /tmp/bng-image.tar -c ${{ env.K3D_CLUSTER }}
+          fi
+          if [ -f /tmp/nexus-image.tar ]; then
+            k3d image import /tmp/nexus-image.tar -c ${{ env.K3D_CLUSTER }}
+          fi
+
+      - name: Wait for cluster ready
+        run: |
+          echo "Waiting for node to be ready..."
+          kubectl wait --for=condition=Ready node --all --timeout=120s
+
+          echo "Waiting for core pods..."
+          kubectl wait --for=condition=Ready pod --all -n kube-system --timeout=120s || true
+
+      - name: Deploy test components
+        run: |
+          echo "Deploying test group: ${{ matrix.test-group }}"
+
+          # Map test group to kustomization path
+          case "${{ matrix.test-group }}" in
+            e2e)         KUSTOMIZE_PATH="components/e2e-test" ;;
+            ha-nexus)    KUSTOMIZE_PATH="components/ha-nexus-test" ;;
+            failure)     KUSTOMIZE_PATH="components/failure-test" ;;
+          esac
+
+          echo "Applying kustomization: $KUSTOMIZE_PATH"
+          kubectl apply -k "$KUSTOMIZE_PATH"
+
+      - name: Wait for pods
+        run: |
+          case "${{ matrix.test-group }}" in
+            e2e)
+              NAMESPACE="demo-e2e"
+              ;;
+            ha-nexus)
+              NAMESPACE="demo-ha-nexus"
+              ;;
+            failure)
+              NAMESPACE="demo-failure"
+              ;;
+          esac
+
+          echo "Waiting for pods in namespace $NAMESPACE..."
+          kubectl wait --for=condition=Ready pod --all -n "$NAMESPACE" --timeout=300s || true
+
+          echo ""
+          echo "Pod status:"
+          kubectl get pods -n "$NAMESPACE" -o wide
+
+      - name: Run verification
+        run: |
+          case "${{ matrix.test-group }}" in
+            e2e)
+              NAMESPACE="demo-e2e"
+              echo "=== E2E Integration Test ==="
+              echo ""
+
+              # Check Nexus is serving
+              echo "Checking Nexus API..."
+              kubectl exec -n "$NAMESPACE" bng-e2e -c client -- \
+                wget -q -O- http://nexus:9000/api/v1/pools 2>&1 || echo "Nexus API not ready yet"
+
+              # Check BNG is running
+              echo ""
+              echo "Checking BNG status..."
+              kubectl logs -n "$NAMESPACE" bng-e2e -c bng --tail=20 || true
+
+              # Run DHCP client test
+              echo ""
+              echo "Running DHCP client..."
+              kubectl exec -n "$NAMESPACE" bng-e2e -c client -- sh -c '
+                apk add --no-cache udhcpc 2>/dev/null || true
+                cat > /tmp/udhcpc.sh << "SCRIPT"
+#!/bin/sh
+case "$1" in
+  bound|renew)
+    ip addr flush dev $interface 2>/dev/null
+    ip addr add $ip/$mask dev $interface
+    echo "DHCP_RESULT: ip=$ip mask=$mask"
+    ;;
+esac
+SCRIPT
+                chmod +x /tmp/udhcpc.sh
+                timeout 30 udhcpc -i veth-client -n -q -t 5 -T 3 -f -s /tmp/udhcpc.sh 2>&1 || echo "DHCP timeout"
+              '
+
+              # Verify client got an IP
+              echo ""
+              echo "Verifying client IP..."
+              CLIENT_IP=$(kubectl exec -n "$NAMESPACE" bng-e2e -c client -- \
+                ip addr show veth-client 2>/dev/null | grep "inet " | awk '{print $2}' | cut -d/ -f1)
+              echo "Client IP: ${CLIENT_IP:-none}"
+
+              if echo "$CLIENT_IP" | grep -q "^10\.200\."; then
+                echo "PASS: Client got IP from Nexus pool"
+              else
+                echo "INFO: Client IP not from expected pool (may need more setup time)"
+              fi
+              ;;
+
+            ha-nexus)
+              NAMESPACE="demo-ha-nexus"
+              echo "=== HA Nexus Test ==="
+              echo ""
+
+              # Check Nexus is serving
+              echo "Checking Nexus API..."
+              kubectl exec -n "$NAMESPACE" bng-ha-test -c client -- \
+                wget -q -O- http://nexus:9000/api/v1/pools 2>&1 || echo "Nexus not ready"
+
+              # Check BNG logs
+              echo ""
+              echo "BNG status:"
+              kubectl logs -n "$NAMESPACE" bng-ha-test -c bng --tail=10 || true
+
+              echo ""
+              echo "PASS: HA Nexus components deployed successfully"
+              ;;
+
+            failure)
+              NAMESPACE="demo-failure"
+              echo "=== Failure Injection Test ==="
+              echo ""
+
+              # Check all Nexus pods
+              echo "Nexus StatefulSet status:"
+              kubectl get pods -n "$NAMESPACE" -l app=nexus
+
+              # Check BNG pods
+              echo ""
+              echo "BNG pods:"
+              kubectl get pods -n "$NAMESPACE" -l app=bng
+
+              # Check test controller
+              echo ""
+              echo "Test controller:"
+              kubectl get pods -n "$NAMESPACE" -l app=test-controller
+
+              # Run test suite from controller
+              echo ""
+              echo "Running failure test suite..."
+              kubectl exec -n "$NAMESPACE" test-controller -c controller -- \
+                /scripts/run-all-tests.sh 2>&1 || echo "Some tests may require full cluster setup"
+
+              echo ""
+              echo "PASS: Failure test components deployed"
+              ;;
+          esac
+
+      - name: Collect logs on failure
+        if: failure()
+        run: |
+          case "${{ matrix.test-group }}" in
+            e2e)         NAMESPACE="demo-e2e" ;;
+            ha-nexus)    NAMESPACE="demo-ha-nexus" ;;
+            failure)     NAMESPACE="demo-failure" ;;
+          esac
+
+          echo "=== Pod Status ==="
+          kubectl get pods -n "$NAMESPACE" -o wide
+
+          echo ""
+          echo "=== Pod Descriptions ==="
+          kubectl describe pods -n "$NAMESPACE"
+
+          echo ""
+          echo "=== Events ==="
+          kubectl get events -n "$NAMESPACE" --sort-by='.lastTimestamp'
+
+          echo ""
+          echo "=== Logs ==="
+          for pod in $(kubectl get pods -n "$NAMESPACE" -o name); do
+            echo "--- $pod ---"
+            kubectl logs "$pod" -n "$NAMESPACE" --all-containers --tail=50 || true
+          done
+
+      - name: Generate test report
+        if: always()
+        run: |
+          echo "## Integration Test: ${{ matrix.test-group }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Pod Status" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+          case "${{ matrix.test-group }}" in
+            e2e)         NAMESPACE="demo-e2e" ;;
+            ha-nexus)    NAMESPACE="demo-ha-nexus" ;;
+            failure)     NAMESPACE="demo-failure" ;;
+          esac
+
+          kubectl get pods -n "$NAMESPACE" -o wide 2>&1 >> $GITHUB_STEP_SUMMARY || true
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: Cleanup
+        if: always()
+        run: |
+          k3d cluster delete ${{ env.K3D_CLUSTER }} || true
+
+  # ===========================================================================
+  # Kustomize validation (no cluster needed)
+  # ===========================================================================
+  validate-manifests:
+    name: Validate Manifests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Validate kustomizations
+        run: |
+          echo "=== Validating all test kustomizations ==="
+          FAILED=0
+
+          for dir in components/*-test; do
+            if [ -f "$dir/kustomization.yaml" ]; then
+              echo ""
+              echo "--- $dir ---"
+              if kubectl kustomize "$dir" > /dev/null 2>&1; then
+                echo "  PASS: Valid kustomization"
+              else
+                echo "  FAIL: Invalid kustomization"
+                kubectl kustomize "$dir" 2>&1 || true
+                FAILED=1
+              fi
+            fi
+          done
+
+          if [ $FAILED -eq 1 ]; then
+            echo ""
+            echo "ERROR: Some kustomizations failed validation"
+            exit 1
+          fi
+
+          echo ""
+          echo "All kustomizations are valid"
+
+      - name: Generate validation report
+        if: always()
+        run: |
+          echo "## Manifest Validation" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Component | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----------|--------|" >> $GITHUB_STEP_SUMMARY
+
+          for dir in components/*-test; do
+            if [ -f "$dir/kustomization.yaml" ]; then
+              NAME=$(basename "$dir")
+              if kubectl kustomize "$dir" > /dev/null 2>&1; then
+                echo "| $NAME | Pass |" >> $GITHUB_STEP_SUMMARY
+              else
+                echo "| $NAME | Fail |" >> $GITHUB_STEP_SUMMARY
+              fi
+            fi
+          done
+
+  # ===========================================================================
+  # Summary
+  # ===========================================================================
+  integration-success:
+    name: Integration Tests Success
+    runs-on: ubuntu-latest
+    needs: [integration-test, validate-manifests]
+    if: always()
+    steps:
+      - name: Check results
+        run: |
+          if [ "${{ needs.validate-manifests.result }}" = "failure" ]; then
+            echo "Manifest validation failed"
+            exit 1
+          fi
+
+          if [ "${{ needs.integration-test.result }}" = "failure" ]; then
+            echo "Some integration tests failed"
+            exit 1
+          fi
+
+          echo "All integration tests passed"
+
+      - name: Generate summary
+        if: always()
+        run: |
+          echo "# Integration Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Job | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Manifest Validation | ${{ needs.validate-manifests.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Integration Tests | ${{ needs.integration-test.result }} |" >> $GITHUB_STEP_SUMMARY

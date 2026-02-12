@@ -1,0 +1,16 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bng
+spec:
+  template:
+    spec:
+      containers:
+        - name: bng
+          args:
+            - demo
+            - --subscribers=50
+            - --duration=24h
+            - --api-port=8080
+            - --nexus-url=http://radiusless-nexus.demo-radiusless.svc:9000
+            - --radius-enabled=false

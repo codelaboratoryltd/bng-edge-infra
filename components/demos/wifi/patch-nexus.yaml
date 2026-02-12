@@ -1,0 +1,14 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: nexus
+spec:
+  replicas: 1
+  template:
+    spec:
+      containers:
+        - name: nexus
+          args:
+            - serve
+            - --http-port=9000
+            - --metrics-port=9002
