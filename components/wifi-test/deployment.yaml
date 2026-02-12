@@ -231,7 +231,7 @@ spec:
       args:
         - |
           echo "Creating WiFi pool in Nexus..."
-          wget -q -O- --post-data='{"id":"wifi-pool","cidr":"10.200.0.0/16","prefix_length":32,"mode":"lease"}' \
+          wget -q -O- --post-data='{"id":"wifi-pool","cidr":"10.200.0.0/16","prefix":32}' \
             --header='Content-Type: application/json' \
             http://nexus:9000/api/v1/pools || true
           echo "Pool created"
@@ -266,6 +266,7 @@ spec:
         - "--epoch-period=30s"
         - "--epoch-grace=1"
         - "--nexus-url=http://nexus:9000"
+        - "--nexus-pool=wifi-pool"
         - "--lease-time=2m"
         
       env:
