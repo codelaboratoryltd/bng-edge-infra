@@ -1,0 +1,47 @@
+{
+  "local_as": 65100,
+  "router_id": "10.0.0.1",
+  "neighbors": [
+    {
+      "address": "10.0.1.1",
+      "remote_as": 65200,
+      "description": "ISP-A-Primary",
+      "bfd_enabled": true,
+      "next_hop_self": true,
+      "route_map_in": "ISP-A-IN",
+      "route_map_out": "ISP-A-OUT"
+    },
+    {
+      "address": "10.0.2.1",
+      "remote_as": 65300,
+      "description": "ISP-B-Backup",
+      "bfd_enabled": true,
+      "next_hop_self": true,
+      "route_map_in": "ISP-B-IN",
+      "route_map_out": "ISP-B-OUT"
+    }
+  ],
+  "bfd": {
+    "min_rx_interval": 100,
+    "min_tx_interval": 100,
+    "detect_multiplier": 3
+  },
+  "route_maps": {
+    "ISP-A-IN": {
+      "action": "permit",
+      "set_clauses": ["local-preference 200"]
+    },
+    "ISP-B-IN": {
+      "action": "permit",
+      "set_clauses": ["local-preference 100"]
+    },
+    "ISP-A-OUT": {
+      "action": "permit",
+      "set_clauses": ["community 65200:100"]
+    },
+    "ISP-B-OUT": {
+      "action": "permit",
+      "set_clauses": ["community 65300:100"]
+    }
+  }
+}

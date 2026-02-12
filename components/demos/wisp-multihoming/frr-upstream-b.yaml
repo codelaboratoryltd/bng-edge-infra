@@ -1,0 +1,79 @@
+# Simulated upstream ISP-B (backup) using FRR
+# Peers with BNG via BGP AS 65300
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frr-upstream-b
+  labels:
+    app: frr-upstream
+    provider: isp-b
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: frr-upstream
+      provider: isp-b
+  template:
+    metadata:
+      labels:
+        app: frr-upstream
+        provider: isp-b
+    spec:
+      containers:
+        - name: frr
+          image: quay.io/frrouting/frr:10.0.0
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              cat > /etc/frr/frr.conf << 'EOF'
+              frr defaults traditional
+              hostname isp-b
+              log syslog informational
+              !
+              router bgp 65300
+               bgp router-id 10.0.2.1
+               neighbor 10.0.2.2 remote-as 65100
+               neighbor 10.0.2.2 description WISP-BNG
+               neighbor 10.0.2.2 bfd
+               !
+               address-family ipv4 unicast
+                neighbor 10.0.2.2 activate
+                network 0.0.0.0/0
+               exit-address-family
+              !
+              bfd
+               peer 10.0.2.2
+                receive-interval 100
+                transmit-interval 100
+                detect-multiplier 3
+               !
+              !
+              EOF
+              /usr/lib/frr/docker-start
+          ports:
+            - name: bgp
+              containerPort: 179
+              protocol: TCP
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: frr-upstream-b
+  labels:
+    app: frr-upstream
+    provider: isp-b
+spec:
+  ports:
+    - name: bgp
+      port: 179
+      targetPort: 179
+  selector:
+    app: frr-upstream
+    provider: isp-b
