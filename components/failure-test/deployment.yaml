@@ -728,6 +728,26 @@ spec:
   shareProcessNamespace: true
 
   initContainers:
+    - name: wait-nexus
+      image: busybox:1.36
+      command: ["sh", "-c"]
+      args:
+        - |
+          echo "Waiting for Nexus..."
+          until wget -q -O- http://nexus-failure-0.nexus-failure:9000/health >/dev/null 2>&1; do
+            sleep 1
+          done
+          echo "Nexus is ready"
+    - name: create-pool
+      image: busybox:1.36
+      command: ["sh", "-c"]
+      args:
+        - |
+          echo "Creating test pool in Nexus..."
+          wget -q -O- --post-data='{"id":"test-pool","cidr":"10.100.0.0/16","prefix":32}' \
+            --header='Content-Type: application/json' \
+            http://nexus-failure-0.nexus-failure:9000/api/v1/pools || true
+          echo "Pool created"
     - name: network-setup
       image: nicolaka/netshoot:latest
       command: ["/bin/sh", "-c"]
@@ -753,6 +773,7 @@ spec:
         - "--pool-gateway=10.100.0.1"
         - "--pool-dns=8.8.8.8"
         - "--nexus-url=http://nexus-failure-0.nexus-failure:9000"
+        - "--nexus-pool=test-pool"
         # HA configuration
         - "--ha-role=active"
         - "--ha-listen=:9001"
@@ -824,6 +845,7 @@ spec:
         - "--pool-gateway=10.100.0.1"
         - "--pool-dns=8.8.8.8"
         - "--nexus-url=http://nexus-failure-0.nexus-failure:9000"
+        - "--nexus-pool=test-pool"
         # HA configuration (standby)
         - "--ha-role=standby"
         - "--ha-peer=http://bng-active:9001"
