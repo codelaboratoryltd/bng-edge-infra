@@ -35,6 +35,18 @@ resources:
   # Demo D: Full Distributed (3 Nexus + 2 BNG)
   - ../../components/demos/distributed
 
+  # Demo E: RADIUS-less (BNG + Nexus, no RADIUS)
+  - ../../components/demos/radiusless
+
+  # Demo F: WiFi + Nexus (TTL sticky sessions)
+  - ../../components/demos/wifi
+
+  # Demo G: Pool Shards (multi-BNG static partitioning)
+  - ../../components/demos/pool-shards
+
+  # Demo H: HA Pair (Active/Standby failover)
+  - ../../components/demos/ha-pair
+
   # ==========================================================================
   # Test Components (self-contained kustomizations)
   # ==========================================================================

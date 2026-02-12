@@ -55,6 +55,22 @@ group_kustomizations = {
         "path": "components/demos/distributed",
         "resources": ["distributed-bng", "distributed-nexus"],
     },
+    "demo-e": {
+        "path": "components/demos/radiusless",
+        "resources": ["radiusless-bng", "radiusless-nexus"],
+    },
+    "demo-f": {
+        "path": "components/demos/wifi",
+        "resources": ["wifi-bng", "wifi-nexus"],
+    },
+    "demo-g": {
+        "path": "components/demos/pool-shards",
+        "resources": ["shard-bng"],
+    },
+    "demo-h": {
+        "path": "components/demos/ha-pair",
+        "resources": ["ha-bng-active", "ha-bng-standby", "ha-nexus"],
+    },
 
     # Tests
     "e2e": {
@@ -135,7 +151,7 @@ k8s_yaml(kustomize('charts/cilium'))
 
 # Meta groups (expand to individual groups)
 meta_groups = {
-    "demos": ["demo-a", "demo-b", "demo-c", "demo-d"],
+    "demos": ["demo-a", "demo-b", "demo-c", "demo-d", "demo-e", "demo-f", "demo-g", "demo-h"],
     "tests": ["e2e", "blaster", "blaster-test", "walled-garden", "ha-nexus", "ha-p2p",
               "wifi", "peer-pool", "radius-time", "pppoe", "ipv6", "nat", "qos", "bgp", "failure"],
     "all": [],  # Populated below
@@ -150,6 +166,9 @@ group_depends = {
     "demo-b": ["infra"],
     "demo-c": ["infra"],
     "demo-d": ["infra"],
+    "demo-e": ["infra"],
+    "demo-f": ["infra"],
+    "demo-h": ["infra"],
     "e2e": ["infra"],
     "demos": ["infra"],
     "tests": ["infra"],
@@ -160,6 +179,10 @@ group_depends = {
 resource_depends = {
     "single-bng": ["single-nexus"],
     "distributed-bng": ["distributed-nexus"],
+    "radiusless-bng": ["radiusless-nexus"],
+    "wifi-bng": ["wifi-nexus"],
+    "ha-bng-active": ["ha-nexus"],
+    "ha-bng-standby": ["ha-nexus"],
     "bng-e2e": ["nexus"],
 }
 
@@ -183,6 +206,22 @@ resource_port_forwards = {
     # Demo D
     "distributed-bng": "8083:8080",
     "distributed-nexus": "9003:9000",
+
+    # Demo E
+    "radiusless-bng": "8084:8080",
+    "radiusless-nexus": "9004:9000",
+
+    # Demo F
+    "wifi-bng": "8085:8080",
+    "wifi-nexus": "9005:9000",
+
+    # Demo G
+    "shard-bng": "8086:8080",
+
+    # Demo H
+    "ha-bng-active": "8087:8080",
+    "ha-bng-standby": "8088:8080",
+    "ha-nexus": "9006:9000",
 
     # E2E
     "nexus": "9010:9000",
@@ -512,6 +551,10 @@ No resources specified. Available groups:
     demo-b          Single integration (1 BNG + 1 Nexus)
     demo-c          P2P cluster (3 Nexus, DNS discovery)
     demo-d          Distributed (3 Nexus + 2 BNG)
+    demo-e          RADIUS-less (BNG + Nexus, no RADIUS)
+    demo-f          WiFi + Nexus (TTL sticky sessions)
+    demo-g          Pool Shards (multi-BNG static partitioning)
+    demo-h          HA Pair (Active/Standby failover)
     demos           All demos
 
   Tests:

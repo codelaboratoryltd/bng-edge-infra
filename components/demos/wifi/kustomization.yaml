@@ -1,0 +1,23 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Demo F: WiFi + Nexus (Campus WiFi with TTL sticky sessions)
+# BNG operates in WiFi mode with short TTL leases and session stickiness
+
+namespace: demo-wifi
+
+resources:
+  - namespace.yaml
+  - ../../base/bng
+  - ../../base/nexus
+  - configmap.yaml
+
+namePrefix: wifi-
+
+labels:
+  - pairs:
+      demo: wifi
+
+patches:
+  - path: patch-bng.yaml
+  - path: patch-nexus.yaml

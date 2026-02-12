@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: wifi-config
+data:
+  # WiFi-specific DHCP settings
+  LEASE_TTL: "300"
+  LEASE_MODE: "ttl-sticky"
+  # Campus WiFi typically uses shorter lease times for roaming clients
+  # TTL sticky mode: clients get the same IP when reconnecting within TTL window

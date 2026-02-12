@@ -1,0 +1,22 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Demo E: RADIUS-less (BNG + Nexus without RADIUS)
+# BNG uses --nexus-url for direct IP allocation, bypassing RADIUS authentication
+
+namespace: demo-radiusless
+
+resources:
+  - namespace.yaml
+  - ../../base/bng
+  - ../../base/nexus
+
+namePrefix: radiusless-
+
+labels:
+  - pairs:
+      demo: radiusless
+
+patches:
+  - path: patch-bng.yaml
+  - path: patch-nexus.yaml

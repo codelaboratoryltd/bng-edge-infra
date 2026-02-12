@@ -1,0 +1,92 @@
+# BNG StatefulSet for pool shards demo
+# Each BNG instance gets a static pool shard based on ordinal index
+# No Nexus coordination needed - pools are pre-partitioned
+apiVersion: v1
+kind: Service
+metadata:
+  name: bng
+  labels:
+    app: bng
+spec:
+  ports:
+    - name: api
+      port: 8080
+      targetPort: 8080
+    - name: metrics
+      port: 9090
+      targetPort: 9090
+  clusterIP: None  # Headless for StatefulSet
+  selector:
+    app: bng
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: bng
+  labels:
+    app: bng
+spec:
+  serviceName: bng
+  replicas: 3
+  selector:
+    matchLabels:
+      app: bng
+  template:
+    metadata:
+      labels:
+        app: bng
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+        - name: bng
+          image: ghcr.io/codelaboratoryltd/bng:latest
+          args:
+            - demo
+            - --subscribers=50
+            - --duration=24h
+            - --api-port=8080
+            - --pool-mode=static-shard
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: BNG_NODE_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            # Pool shard configuration:
+            # bng-0: 10.80.0.0/24, bng-1: 10.80.1.0/24, bng-2: 10.80.2.0/24
+            - name: BNG_POOL_BASE
+              value: "10.80.0.0/16"
+            - name: BNG_SHARD_COUNT
+              value: "3"
+          ports:
+            - name: api
+              containerPort: 8080
+              protocol: TCP
+            - name: metrics
+              containerPort: 9090
+              protocol: TCP
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 5
