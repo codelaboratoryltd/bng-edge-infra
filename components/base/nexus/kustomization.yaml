@@ -6,6 +6,7 @@ resources:
   - service.yaml
   - rbac.yaml
   - pdb.yaml
+  - networkpolicy.yaml
 
 labels:
   - pairs:

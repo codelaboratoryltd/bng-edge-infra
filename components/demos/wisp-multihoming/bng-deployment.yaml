@@ -1,0 +1,93 @@
+# BNG with BGP enabled for WISP multi-homing demo
+# Connects to dual upstream ISPs via FRR/BGP with BFD failover
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bng
+  labels:
+    app: bng
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: bng
+  template:
+    metadata:
+      labels:
+        app: bng
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+        - name: bng
+          image: ghcr.io/codelaboratoryltd/bng:latest
+          args:
+            - demo
+            - --subscribers=100
+            - --duration=24h
+            - --api-port=8080
+            - --nexus-url=http://wisp-nexus.demo-wisp-multihoming.svc:9000
+            - --bgp-enabled
+            - --bgp-local-as=65100
+            - --bgp-router-id=10.0.0.1
+            - --bgp-config=/etc/bng/bgp-neighbors.json
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: BNG_NODE_ID
+              value: "wisp-bng"
+          ports:
+            - name: api
+              containerPort: 8080
+              protocol: TCP
+            - name: metrics
+              containerPort: 9090
+              protocol: TCP
+          volumeMounts:
+            - name: bgp-config
+              mountPath: /etc/bng
+              readOnly: true
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 5
+      volumes:
+        - name: bgp-config
+          configMap:
+            name: bgp-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: bng
+  labels:
+    app: bng
+spec:
+  ports:
+    - name: api
+      port: 8080
+      targetPort: 8080
+    - name: metrics
+      port: 9090
+      targetPort: 9090
+  selector:
+    app: bng

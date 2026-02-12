@@ -1,0 +1,69 @@
+# Cilium NetworkPolicy for BNG pods
+# Allows: DHCP (67/68 UDP), egress to Nexus API, egress to RADIUS, health probes
+# Denies: all other ingress
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: bng
+  labels:
+    app: bng
+spec:
+  endpointSelector:
+    matchLabels:
+      app: bng
+  ingress:
+    # Allow DHCP requests from subscribers (bootpc -> bootps)
+    - fromEntities:
+        - world
+        - cluster
+      toPorts:
+        - ports:
+            - port: "67"
+              protocol: UDP
+            - port: "68"
+              protocol: UDP
+    # Allow health check probes from Kubernetes
+    - fromEntities:
+        - health
+        - cluster
+      toPorts:
+        - ports:
+            - port: "8080"
+              protocol: TCP
+    # Allow Prometheus scraping
+    - fromEntities:
+        - cluster
+      toPorts:
+        - ports:
+            - port: "9090"
+              protocol: TCP
+  egress:
+    # Allow egress to Nexus API for IP allocation
+    - toEndpoints:
+        - matchLabels:
+            app: nexus
+      toPorts:
+        - ports:
+            - port: "9000"
+              protocol: TCP
+    # Allow egress to RADIUS servers
+    - toEntities:
+        - world
+        - cluster
+      toPorts:
+        - ports:
+            - port: "1812"
+              protocol: UDP
+            - port: "1813"
+              protocol: UDP
+    # Allow DNS resolution
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: kube-system
+            k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: UDP
+            - port: "53"
+              protocol: TCP

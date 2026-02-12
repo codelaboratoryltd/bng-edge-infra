@@ -71,6 +71,10 @@ group_kustomizations = {
         "path": "components/demos/ha-pair",
         "resources": ["ha-bng-active", "ha-bng-standby", "ha-nexus"],
     },
+    "demo-i": {
+        "path": "components/demos/wisp-multihoming",
+        "resources": ["wisp-bng", "wisp-nexus", "wisp-frr-upstream-a", "wisp-frr-upstream-b"],
+    },
 
     # Tests
     "e2e": {
@@ -151,7 +155,7 @@ k8s_yaml(kustomize('charts/cilium'))
 
 # Meta groups (expand to individual groups)
 meta_groups = {
-    "demos": ["demo-a", "demo-b", "demo-c", "demo-d", "demo-e", "demo-f", "demo-g", "demo-h"],
+    "demos": ["demo-a", "demo-b", "demo-c", "demo-d", "demo-e", "demo-f", "demo-g", "demo-h", "demo-i"],
     "tests": ["e2e", "blaster", "blaster-test", "walled-garden", "ha-nexus", "ha-p2p",
               "wifi", "peer-pool", "radius-time", "pppoe", "ipv6", "nat", "qos", "bgp", "failure"],
     "all": [],  # Populated below
@@ -169,6 +173,7 @@ group_depends = {
     "demo-e": ["infra"],
     "demo-f": ["infra"],
     "demo-h": ["infra"],
+    "demo-i": ["infra"],
     "e2e": ["infra"],
     "demos": ["infra"],
     "tests": ["infra"],
@@ -183,6 +188,9 @@ resource_depends = {
     "wifi-bng": ["wifi-nexus"],
     "ha-bng-active": ["ha-nexus"],
     "ha-bng-standby": ["ha-nexus"],
+    "wisp-bng": ["wisp-nexus"],
+    "wisp-frr-upstream-a": [],
+    "wisp-frr-upstream-b": [],
     "bng-e2e": ["nexus"],
 }
 
@@ -222,6 +230,10 @@ resource_port_forwards = {
     "ha-bng-active": "8087:8080",
     "ha-bng-standby": "8088:8080",
     "ha-nexus": "9006:9000",
+
+    # Demo I
+    "wisp-bng": "8089:8080",
+    "wisp-nexus": "9007:9000",
 
     # E2E
     "nexus": "9010:9000",
@@ -555,6 +567,7 @@ No resources specified. Available groups:
     demo-f          WiFi + Nexus (TTL sticky sessions)
     demo-g          Pool Shards (multi-BNG static partitioning)
     demo-h          HA Pair (Active/Standby failover)
+    demo-i          WISP Multi-Homing (BGP dual upstream)
     demos           All demos
 
   Tests:

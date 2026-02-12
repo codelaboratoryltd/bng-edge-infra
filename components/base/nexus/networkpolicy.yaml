@@ -1,0 +1,69 @@
+# Cilium NetworkPolicy for Nexus pods
+# Allows: ingress from BNG pods, P2P cluster communication, health probes
+# Denies: all other ingress
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: nexus
+  labels:
+    app: nexus
+spec:
+  endpointSelector:
+    matchLabels:
+      app: nexus
+  ingress:
+    # Allow ingress from BNG pods (API requests)
+    - fromEndpoints:
+        - matchLabels:
+            app: bng
+      toPorts:
+        - ports:
+            - port: "9000"
+              protocol: TCP
+    # Allow P2P cluster communication between Nexus peers
+    - fromEndpoints:
+        - matchLabels:
+            app: nexus
+      toPorts:
+        - ports:
+            - port: "9000"
+              protocol: TCP
+            - port: "9002"
+              protocol: TCP
+    # Allow health check probes from Kubernetes
+    - fromEntities:
+        - health
+        - cluster
+      toPorts:
+        - ports:
+            - port: "9000"
+              protocol: TCP
+    # Allow Prometheus scraping
+    - fromEntities:
+        - cluster
+      toPorts:
+        - ports:
+            - port: "9002"
+              protocol: TCP
+  egress:
+    # Allow P2P cluster communication to other Nexus peers
+    - toEndpoints:
+        - matchLabels:
+            app: nexus
+      toPorts:
+        - ports:
+            - port: "9000"
+              protocol: TCP
+            - port: "9002"
+              protocol: TCP
+    # Allow DNS resolution
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: kube-system
+            k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: UDP
+            - port: "53"
+              protocol: TCP

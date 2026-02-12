@@ -5,6 +5,7 @@ resources:
   - deployment.yaml
   - service.yaml
   - rbac.yaml
+  - networkpolicy.yaml
 
 labels:
   - pairs:

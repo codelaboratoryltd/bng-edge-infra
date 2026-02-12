@@ -1,0 +1,29 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Demo I: WISP Multi-Homing (BGP failover + subscriber management)
+# BNG with BGP enabled, dual upstream providers for redundancy.
+# Demonstrates multi-homed WISP deployment with BFD-based failover.
+
+namespace: demo-wisp-multihoming
+
+resources:
+  - namespace.yaml
+  - ../../base/nexus
+  - bng-deployment.yaml
+  - frr-upstream-a.yaml
+  - frr-upstream-b.yaml
+
+namePrefix: wisp-
+
+labels:
+  - pairs:
+      demo: wisp-multihoming
+
+configMapGenerator:
+  - name: bgp-config
+    files:
+      - bgp-neighbors.json
+
+patches:
+  - path: patch-nexus.yaml
