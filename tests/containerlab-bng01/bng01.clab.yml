@@ -1,0 +1,38 @@
+# Containerlab BNG integration test topology
+#
+# Uses kind: linux (not codelaboratory_bng) so CI doesn't require
+# the custom containerlab kind. Linux kind runs in privileged mode
+# by default, providing NET_ADMIN + BPF + SYS_RESOURCE.
+#
+# Topology:
+#   subscribers (BNG Blaster) --eth1-- bng1 --eth2-- corerouter1 (FRR)
+
+name: bng01
+
+topology:
+  nodes:
+    bng1:
+      kind: linux
+      image: ghcr.io/codelaboratoryltd/bng:ci
+      binds:
+        - bng1/config.yaml:/etc/bng/config.yaml
+        - bng1/start.sh:/start.sh
+      entrypoint: /bin/sh
+      cmd: /start.sh
+
+    corerouter1:
+      kind: linux
+      image: frrouting/frr:v8.4.1
+      binds:
+        - corerouter1/daemons:/etc/frr/daemons
+        - corerouter1/frr.conf:/etc/frr/frr.conf
+
+    subscribers:
+      kind: linux
+      image: bngblaster:ci
+      binds:
+        - subscribers/config.json:/config/config.json
+
+  links:
+    - endpoints: ["subscribers:eth1", "bng1:eth1"]
+    - endpoints: ["bng1:eth2", "corerouter1:eth1"]
