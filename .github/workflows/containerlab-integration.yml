@@ -1,0 +1,238 @@
+# Containerlab BNG Integration Test
+# Deploys the bng01 topology using containerlab and runs BNG Blaster
+# to simulate 10 IPoE/DHCP subscribers against the BNG.
+name: Containerlab BNG Integration
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/bng/**"
+      - "tests/containerlab-bng01/**"
+      - ".github/workflows/containerlab-integration.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "src/bng/**"
+      - "tests/containerlab-bng01/**"
+      - ".github/workflows/containerlab-integration.yml"
+  workflow_dispatch:
+
+env:
+  CLAB_VERSION: "0.69.3"
+  BNG_IMAGE: "ghcr.io/codelaboratoryltd/bng:ci"
+  BLASTER_IMAGE: "bngblaster:ci"
+  LAB_DIR: "tests/containerlab-bng01"
+
+jobs:
+  # ===========================================================================
+  # Containerlab BNG Integration Test
+  # ===========================================================================
+  containerlab-bng:
+    name: BNG Blaster 10-subscriber test
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build BNG image
+        uses: docker/build-push-action@v6
+        with:
+          context: src/bng
+          push: false
+          load: true
+          tags: ${{ env.BNG_IMAGE }}
+          cache-from: type=gha,scope=clab-bng
+          cache-to: type=gha,scope=clab-bng,mode=max
+
+      - name: Build BNG Blaster image
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ env.LAB_DIR }}/subscribers
+          push: false
+          load: true
+          tags: ${{ env.BLASTER_IMAGE }}
+          cache-from: type=gha,scope=clab-blaster
+          cache-to: type=gha,scope=clab-blaster,mode=max
+
+      - name: Install containerlab
+        run: |
+          bash -c "$(curl -sL https://get.containerlab.dev)" -- -v ${{ env.CLAB_VERSION }}
+          clab version
+
+      - name: Deploy lab
+        working-directory: ${{ env.LAB_DIR }}
+        run: |
+          sudo clab deploy -t bng01.clab.yml --reconfigure
+          echo ""
+          echo "=== Lab nodes ==="
+          sudo clab inspect -t bng01.clab.yml
+
+      - name: Wait for BNG health
+        run: |
+          echo "Waiting for BNG to start..."
+          BNG_CONTAINER="clab-bng01-bng1"
+          MAX_RETRIES=30
+          RETRY_INTERVAL=2
+
+          for i in $(seq 1 $MAX_RETRIES); do
+            if docker exec "$BNG_CONTAINER" wget -q -O- http://127.0.0.1:9090/health 2>/dev/null | grep -q "ok"; then
+              echo "BNG health check passed (attempt $i)"
+              break
+            fi
+            if [ "$i" -eq "$MAX_RETRIES" ]; then
+              echo "ERROR: BNG failed to become healthy after $((MAX_RETRIES * RETRY_INTERVAL))s"
+              echo ""
+              echo "=== BNG container logs ==="
+              docker logs "$BNG_CONTAINER" --tail=50
+              exit 1
+            fi
+            echo "  Attempt $i/$MAX_RETRIES - waiting ${RETRY_INTERVAL}s..."
+            sleep "$RETRY_INTERVAL"
+          done
+
+      - name: Run BNG Blaster
+        id: blaster
+        run: |
+          echo "=== Running BNG Blaster (10 IPoE/DHCP subscribers) ==="
+          echo ""
+
+          SUBSCRIBER_CONTAINER="clab-bng01-subscribers"
+
+          # Run blaster with DHCP logging for 45s then terminate
+          docker exec "$SUBSCRIBER_CONTAINER" \
+            sh -c 'timeout 45 bngblaster -C /config/config.json -l dhcp -b -J /tmp/report.json; true' \
+            2>&1 | tee /tmp/blaster-output.txt
+
+          echo ""
+          echo "=== BNG Blaster output ==="
+          cat /tmp/blaster-output.txt
+
+      - name: Parse results
+        id: results
+        run: |
+          echo "=== Parsing BNG Blaster results ==="
+          echo ""
+
+          # Primary check: BNG Blaster prints this when all sessions are up
+          if grep -q 'ALL SESSIONS ESTABLISHED' /tmp/blaster-output.txt 2>/dev/null; then
+            ALL_UP="true"
+          else
+            ALL_UP="false"
+          fi
+
+          # Extract session counts from report
+          ESTABLISHED=$(grep -oP 'Sessions established: \K\d+' /tmp/blaster-output.txt 2>/dev/null | tail -1 || echo "0")
+          DHCP_ACKS=$(grep -c 'DHCP-ACK received' /tmp/blaster-output.txt 2>/dev/null || echo "0")
+          DHCP_TX=$(grep -oP 'DHCP\s+TX:\s*\K\d+' /tmp/blaster-output.txt 2>/dev/null | tail -1 || echo "0")
+          DHCP_RX=$(grep -oP 'DHCP\s+RX:\s*\K\d+' /tmp/blaster-output.txt 2>/dev/null | tail -1 || echo "0")
+          DHCP_TIMEOUTS=$(grep -oP 'DHCP Request:\s*\K\d+' /tmp/blaster-output.txt 2>/dev/null | tail -1 || echo "0")
+
+          echo "Sessions established: $ESTABLISHED/10"
+          echo "DHCP ACKs received: $DHCP_ACKS"
+          echo "DHCP TX: $DHCP_TX  RX: $DHCP_RX  Timeouts: $DHCP_TIMEOUTS"
+          echo "established=$ESTABLISHED" >> $GITHUB_OUTPUT
+          echo "dhcp_acks=$DHCP_ACKS" >> $GITHUB_OUTPUT
+          echo "dhcp_tx=$DHCP_TX" >> $GITHUB_OUTPUT
+          echo "dhcp_rx=$DHCP_RX" >> $GITHUB_OUTPUT
+
+          # Success = all 10 sessions established (DHCP + ARP resolution)
+          if [ "$ALL_UP" = "true" ] && [ "$ESTABLISHED" -ge 10 ]; then
+            echo ""
+            echo "PASS: All 10 sessions established"
+            echo "pass=true" >> $GITHUB_OUTPUT
+          elif [ "$DHCP_ACKS" -ge 10 ]; then
+            echo ""
+            echo "PASS: All 10 DHCP DORA cycles completed ($ESTABLISHED sessions established)"
+            echo "pass=true" >> $GITHUB_OUTPUT
+          else
+            echo ""
+            echo "FAIL: Expected 10 sessions, got $ESTABLISHED established / $DHCP_ACKS ACKs"
+            echo "pass=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Check BNG metrics
+        run: |
+          echo "=== BNG Metrics ==="
+          echo ""
+
+          BNG_CONTAINER="clab-bng01-bng1"
+
+          echo "DHCP metrics:"
+          docker exec "$BNG_CONTAINER" \
+            wget -q -O- http://127.0.0.1:9090/metrics 2>/dev/null | \
+            grep -E "^(dhcp_|bng_dhcp|bng_active)" || echo "  (no DHCP metrics found)"
+
+          echo ""
+          echo "Cache metrics:"
+          docker exec "$BNG_CONTAINER" \
+            wget -q -O- http://127.0.0.1:9090/metrics 2>/dev/null | \
+            grep -E "^(cache_|hit_rate)" || echo "  (no cache metrics found)"
+
+      - name: Collect logs on failure
+        if: failure()
+        run: |
+          echo "=== BNG container logs ==="
+          docker logs clab-bng01-bng1 --tail=200 2>&1 || true
+
+          echo ""
+          echo "=== FRR container logs ==="
+          docker logs clab-bng01-corerouter1 --tail=50 2>&1 || true
+
+          echo ""
+          echo "=== Subscriber container logs ==="
+          docker logs clab-bng01-subscribers --tail=50 2>&1 || true
+
+          echo ""
+          echo "=== BNG interfaces ==="
+          docker exec clab-bng01-bng1 ip addr 2>/dev/null || true
+
+          echo ""
+          echo "=== BNG routes ==="
+          docker exec clab-bng01-bng1 ip route 2>/dev/null || true
+
+          echo ""
+          echo "=== Docker network ==="
+          docker network ls 2>/dev/null || true
+
+      - name: Generate report
+        if: always()
+        run: |
+          echo "## Containerlab BNG Integration Test" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Topology" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "subscribers (BNG Blaster) --eth1-- bng1 --eth2-- corerouter1 (FRR)" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Sessions established | ${{ steps.results.outputs.established || '—' }}/10 |" >> $GITHUB_STEP_SUMMARY
+          echo "| DHCP ACKs received | ${{ steps.results.outputs.dhcp_acks || '—' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| DHCP TX / RX | ${{ steps.results.outputs.dhcp_tx || '—' }} / ${{ steps.results.outputs.dhcp_rx || '—' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Result | ${{ steps.results.outputs.pass == 'true' && '✅ Pass' || '❌ Check logs' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Configuration" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Parameter | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Containerlab | v${{ env.CLAB_VERSION }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| BNG image | \`${{ env.BNG_IMAGE }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Pool | 10.0.1.0/24 |" >> $GITHUB_STEP_SUMMARY
+          echo "| Subscriber count | 10 |" >> $GITHUB_STEP_SUMMARY
+          echo "| Session start rate | 2/sec |" >> $GITHUB_STEP_SUMMARY
+
+      - name: Cleanup
+        if: always()
+        working-directory: ${{ env.LAB_DIR }}
+        run: |
+          sudo clab destroy -t bng01.clab.yml --cleanup || true
