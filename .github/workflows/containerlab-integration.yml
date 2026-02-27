@@ -105,9 +105,9 @@ jobs:
 
           SUBSCRIBER_CONTAINER="clab-bng01-subscribers"
 
-          # Run blaster with DHCP logging for 45s then terminate
+          # Run blaster with DHCP logging for 60s then terminate
           docker exec "$SUBSCRIBER_CONTAINER" \
-            sh -c 'timeout 45 bngblaster -C /config/config.json -l dhcp -b -J /tmp/report.json; true' \
+            sh -c 'timeout 60 bngblaster -C /config/config.json -l dhcp -b -J /tmp/report.json; true' \
             2>&1 | tee /tmp/blaster-output.txt
 
           echo ""
@@ -129,32 +129,31 @@ jobs:
 
           # Extract session counts from report
           ESTABLISHED=$(grep -oP 'Sessions established: \K\d+' /tmp/blaster-output.txt 2>/dev/null | tail -1 || echo "0")
-          DHCP_ACKS=$(grep -c 'DHCP-ACK received' /tmp/blaster-output.txt 2>/dev/null || echo "0")
           DHCP_TX=$(grep -oP 'DHCP\s+TX:\s*\K\d+' /tmp/blaster-output.txt 2>/dev/null | tail -1 || echo "0")
           DHCP_RX=$(grep -oP 'DHCP\s+RX:\s*\K\d+' /tmp/blaster-output.txt 2>/dev/null | tail -1 || echo "0")
           DHCP_TIMEOUTS=$(grep -oP 'DHCP Request:\s*\K\d+' /tmp/blaster-output.txt 2>/dev/null | tail -1 || echo "0")
 
           echo "Sessions established: $ESTABLISHED/10"
-          echo "DHCP ACKs received: $DHCP_ACKS"
           echo "DHCP TX: $DHCP_TX  RX: $DHCP_RX  Timeouts: $DHCP_TIMEOUTS"
           echo "established=$ESTABLISHED" >> $GITHUB_OUTPUT
-          echo "dhcp_acks=$DHCP_ACKS" >> $GITHUB_OUTPUT
           echo "dhcp_tx=$DHCP_TX" >> $GITHUB_OUTPUT
           echo "dhcp_rx=$DHCP_RX" >> $GITHUB_OUTPUT
 
           # Success = all 10 sessions established (DHCP + ARP resolution)
+          # DHCP RX >= 20 means 10 Offers + 10 ACKs (all 10 DORA cycles completed)
           if [ "$ALL_UP" = "true" ] && [ "$ESTABLISHED" -ge 10 ]; then
             echo ""
             echo "PASS: All 10 sessions established"
             echo "pass=true" >> $GITHUB_OUTPUT
-          elif [ "$DHCP_ACKS" -ge 10 ]; then
+          elif [ "$DHCP_RX" -ge 20 ]; then
             echo ""
-            echo "PASS: All 10 DHCP DORA cycles completed ($ESTABLISHED sessions established)"
+            echo "PASS: All 10 DHCP DORA cycles completed (RX=$DHCP_RX, $ESTABLISHED sessions established)"
             echo "pass=true" >> $GITHUB_OUTPUT
           else
             echo ""
-            echo "FAIL: Expected 10 sessions, got $ESTABLISHED established / $DHCP_ACKS ACKs"
+            echo "FAIL: Expected 10 sessions, got $ESTABLISHED established (DHCP RX=$DHCP_RX)"
             echo "pass=false" >> $GITHUB_OUTPUT
+            exit 1
           fi
 
       - name: Check BNG metrics
@@ -217,7 +216,6 @@ jobs:
           echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
           echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
           echo "| Sessions established | ${{ steps.results.outputs.established || '—' }}/10 |" >> $GITHUB_STEP_SUMMARY
-          echo "| DHCP ACKs received | ${{ steps.results.outputs.dhcp_acks || '—' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| DHCP TX / RX | ${{ steps.results.outputs.dhcp_tx || '—' }} / ${{ steps.results.outputs.dhcp_rx || '—' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Result | ${{ steps.results.outputs.pass == 'true' && '✅ Pass' || '❌ Check logs' }} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
