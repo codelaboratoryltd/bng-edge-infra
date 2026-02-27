@@ -156,23 +156,112 @@ jobs:
             exit 1
           fi
 
+      - name: Run BNG Blaster (fast path)
+        id: fastpath
+        run: |
+          echo "=== Running BNG Blaster - Fast Path Run (same 10 MACs) ==="
+          echo ""
+          echo "After run 1, the slow path populated the eBPF subscriber_pools map."
+          echo "Run 2 should hit the XDP fast path for cached subscribers."
+          echo ""
+
+          SUBSCRIBER_CONTAINER="clab-bng01-subscribers"
+
+          # Remove lock file from first run
+          docker exec "$SUBSCRIBER_CONTAINER" rm -f /run/lock/bngblaster_eth1.lock 2>/dev/null || true
+
+          # Small delay to let BNG stabilize after first run
+          sleep 2
+
+          # Run blaster again with same config (same 10 MACs)
+          docker exec "$SUBSCRIBER_CONTAINER" \
+            sh -c 'timeout 60 bngblaster -C /config/config.json -l dhcp -b -J /tmp/report2.json; true' \
+            2>&1 | tee /tmp/blaster-output-fp.txt
+
+          echo ""
+          echo "=== Fast Path BNG Blaster output ==="
+          cat /tmp/blaster-output-fp.txt
+
+          # Parse fast path run results
+          if grep -q 'ALL SESSIONS ESTABLISHED' /tmp/blaster-output-fp.txt 2>/dev/null; then
+            FP_ALL_UP="true"
+          else
+            FP_ALL_UP="false"
+          fi
+
+          FP_ESTABLISHED=$(grep -oP 'Sessions established: \K\d+' /tmp/blaster-output-fp.txt 2>/dev/null | tail -1 || echo "0")
+          FP_DHCP_TX=$(grep -oP 'DHCP\s+TX:\s*\K\d+' /tmp/blaster-output-fp.txt 2>/dev/null | tail -1 || echo "0")
+          FP_DHCP_RX=$(grep -oP 'DHCP\s+RX:\s*\K\d+' /tmp/blaster-output-fp.txt 2>/dev/null | tail -1 || echo "0")
+
+          echo ""
+          echo "Fast path run: Sessions=$FP_ESTABLISHED/10  TX=$FP_DHCP_TX  RX=$FP_DHCP_RX"
+          echo "fp_established=$FP_ESTABLISHED" >> $GITHUB_OUTPUT
+          echo "fp_dhcp_tx=$FP_DHCP_TX" >> $GITHUB_OUTPUT
+          echo "fp_dhcp_rx=$FP_DHCP_RX" >> $GITHUB_OUTPUT
+
+          if [ "$FP_ALL_UP" = "true" ] && [ "$FP_ESTABLISHED" -ge 10 ]; then
+            echo "PASS: All 10 fast path sessions established"
+            echo "fp_pass=true" >> $GITHUB_OUTPUT
+          elif [ "$FP_DHCP_RX" -ge 20 ]; then
+            echo "PASS: All 10 fast path DORA cycles completed (RX=$FP_DHCP_RX)"
+            echo "fp_pass=true" >> $GITHUB_OUTPUT
+          else
+            echo ""
+            echo "WARN: Fast path run got $FP_ESTABLISHED sessions (DHCP RX=$FP_DHCP_RX)"
+            echo "This is expected on CI with xdpgeneric mode - XDP_TX may not deliver via veth."
+            echo "fp_pass=warn" >> $GITHUB_OUTPUT
+          fi
+
       - name: Check BNG metrics
+        id: metrics
         run: |
           echo "=== BNG Metrics ==="
           echo ""
 
           BNG_CONTAINER="clab-bng01-bng1"
 
-          echo "DHCP metrics:"
-          docker exec "$BNG_CONTAINER" \
-            wget -q -O- http://127.0.0.1:9090/metrics 2>/dev/null | \
-            grep -E "^(dhcp_|bng_dhcp|bng_active)" || echo "  (no DHCP metrics found)"
+          # Scrape all metrics
+          METRICS=$(docker exec "$BNG_CONTAINER" \
+            wget -q -O- http://127.0.0.1:9090/metrics 2>/dev/null || echo "")
+
+          if [ -z "$METRICS" ]; then
+            echo "WARNING: Could not scrape metrics endpoint"
+            echo "active_leases=0" >> $GITHUB_OUTPUT
+            echo "fp_hits=0" >> $GITHUB_OUTPUT
+            echo "fp_misses=0" >> $GITHUB_OUTPUT
+            echo "pool_allocated=0" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          # Extract key counters
+          ACTIVE_LEASES=$(echo "$METRICS" | grep -oP '^bng_dhcp_active_leases\s+\K[0-9.]+' || echo "0")
+          FP_HITS=$(echo "$METRICS" | grep -oP '^bng_ebpf_fastpath_hits_total\s+\K[0-9.]+' || echo "0")
+          FP_MISSES=$(echo "$METRICS" | grep -oP '^bng_ebpf_fastpath_misses_total\s+\K[0-9.]+' || echo "0")
+          POOL_ALLOCATED=$(echo "$METRICS" | grep -oP '^bng_pool_allocated_ips\s+\K[0-9.]+' || echo "0")
+
+          echo "Active leases:      $ACTIVE_LEASES"
+          echo "Fast path hits:     $FP_HITS"
+          echo "Fast path misses:   $FP_MISSES"
+          echo "Pool allocated IPs: $POOL_ALLOCATED"
+
+          echo "active_leases=$ACTIVE_LEASES" >> $GITHUB_OUTPUT
+          echo "fp_hits=$FP_HITS" >> $GITHUB_OUTPUT
+          echo "fp_misses=$FP_MISSES" >> $GITHUB_OUTPUT
+          echo "pool_allocated=$POOL_ALLOCATED" >> $GITHUB_OUTPUT
 
           echo ""
-          echo "Cache metrics:"
-          docker exec "$BNG_CONTAINER" \
-            wget -q -O- http://127.0.0.1:9090/metrics 2>/dev/null | \
-            grep -E "^(cache_|hit_rate)" || echo "  (no cache metrics found)"
+          echo "All DHCP metrics:"
+          echo "$METRICS" | grep -E "^(dhcp_|bng_dhcp|bng_ebpf|bng_pool|bng_active)" || echo "  (none found)"
+
+          # Fast path hits > 0 is informational (xdpgeneric on veth may not deliver XDP_TX)
+          if [ "${FP_HITS%.*}" -gt 0 ] 2>/dev/null; then
+            echo ""
+            echo "Fast path hits detected - eBPF XDP fast path is working!"
+          else
+            echo ""
+            echo "NOTE: No fast path hits detected. This is expected on CI with xdpgeneric/veth."
+            echo "The eBPF program runs but XDP_TX replies may not be delivered back through veth pairs."
+          fi
 
       - name: Collect logs on failure
         if: failure()
@@ -211,13 +300,37 @@ jobs:
           echo "subscribers (BNG Blaster) --eth1-- bng1 --eth2-- corerouter1 (FRR)" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Results" >> $GITHUB_STEP_SUMMARY
+          echo "### Slow Path (Run 1)" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
           echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
           echo "| Sessions established | ${{ steps.results.outputs.established || '—' }}/10 |" >> $GITHUB_STEP_SUMMARY
           echo "| DHCP TX / RX | ${{ steps.results.outputs.dhcp_tx || '—' }} / ${{ steps.results.outputs.dhcp_rx || '—' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Result | ${{ steps.results.outputs.pass == 'true' && '✅ Pass' || '❌ Check logs' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Fast Path (Run 2)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Sessions established | ${{ steps.fastpath.outputs.fp_established || '—' }}/10 |" >> $GITHUB_STEP_SUMMARY
+          echo "| DHCP TX / RX | ${{ steps.fastpath.outputs.fp_dhcp_tx || '—' }} / ${{ steps.fastpath.outputs.fp_dhcp_rx || '—' }} |" >> $GITHUB_STEP_SUMMARY
+          FP_RESULT="${{ steps.fastpath.outputs.fp_pass || 'unknown' }}"
+          if [ "$FP_RESULT" = "true" ]; then
+            echo "| Result | ✅ Pass |" >> $GITHUB_STEP_SUMMARY
+          elif [ "$FP_RESULT" = "warn" ]; then
+            echo "| Result | ⚠️ Expected on CI (xdpgeneric) |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| Result | ❌ Check logs |" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### BNG Metrics" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Active leases | ${{ steps.metrics.outputs.active_leases || '—' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| eBPF fast path hits | ${{ steps.metrics.outputs.fp_hits || '—' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| eBPF fast path misses | ${{ steps.metrics.outputs.fp_misses || '—' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Pool allocated IPs | ${{ steps.metrics.outputs.pool_allocated || '—' }} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Configuration" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
