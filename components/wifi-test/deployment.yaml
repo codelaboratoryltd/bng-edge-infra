@@ -28,11 +28,6 @@
 #   - Renewals update epoch to extend lease
 #   - Memory efficient: 2 bits per IP (16KB for /16)
 
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: demo-wifi
----
 # ConfigMap with test scripts
 apiVersion: v1
 kind: ConfigMap

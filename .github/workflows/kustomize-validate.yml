@@ -1,0 +1,40 @@
+# Validate Kustomize Roots - Ensure all root kustomizations build cleanly
+name: Kustomize Validate
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'clusters/**'
+      - 'components/**'
+      - 'charts/**'
+      - 'configs/**'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'clusters/**'
+      - 'components/**'
+      - 'charts/**'
+      - 'configs/**'
+
+jobs:
+  kustomize-validate:
+    name: Validate Kustomize Roots
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Find kustomize roots
+        id: roots
+        uses: mgazza/kustomize-roots@v1
+        with:
+          directory: .
+          build: "true"
+          exclude: ".git src scripts docs tests"
+          json: "true"
+
+      - name: Display roots
+        run: |
+          echo "Kustomize roots found:"
+          echo "${{ steps.roots.outputs.roots }}"
