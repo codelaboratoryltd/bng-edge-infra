@@ -1,0 +1,101 @@
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: nexus
+  name: nexus
+spec:
+  clusterIP: None
+  ports:
+  - name: http
+    port: 9000
+    targetPort: 9000
+  - name: metrics
+    port: 9002
+    targetPort: 9002
+  - name: p2p
+    port: 33123
+    targetPort: 33123
+  selector:
+    app: nexus
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  labels:
+    app: nexus
+  name: nexus
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: nexus
+  serviceName: nexus
+  template:
+    metadata:
+      annotations:
+        prometheus.io/path: /metrics
+        prometheus.io/port: "9002"
+        prometheus.io/scrape: "true"
+      labels:
+        app: nexus
+    spec:
+      containers:
+      - args:
+        - serve
+        - --http-port=9000
+        - --metrics-port=9002
+        - --p2p-port=33123
+        - --p2p=true
+        - --role=core
+        - --data-path=/data
+        env:
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: NEXUS_DISCOVERY
+          value: dht
+        image: ghcr.io/codelaboratoryltd/nexus:latest
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 9000
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        name: nexus
+        ports:
+        - containerPort: 9000
+          name: http
+          protocol: TCP
+        - containerPort: 9002
+          name: metrics
+          protocol: TCP
+        - containerPort: 33123
+          name: p2p
+          protocol: TCP
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 9000
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        resources:
+          limits:
+            cpu: 500m
+            memory: 256Mi
+          requests:
+            cpu: 100m
+            memory: 128Mi
+        volumeMounts:
+        - mountPath: /data
+          name: data
+  volumeClaimTemplates:
+  - metadata:
+      name: data
+    spec:
+      accessModes:
+      - ReadWriteOnce
+      resources:
+        requests:
+          storage: 1Gi

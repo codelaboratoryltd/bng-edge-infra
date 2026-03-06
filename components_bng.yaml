@@ -1,0 +1,83 @@
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: bng
+  name: bng
+spec:
+  clusterIP: None
+  ports:
+  - name: http
+    port: 8080
+    targetPort: 8080
+  - name: metrics
+    port: 9090
+    targetPort: 9090
+  selector:
+    app: bng
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  labels:
+    app: bng
+  name: bng
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: bng
+  serviceName: bng
+  template:
+    metadata:
+      annotations:
+        prometheus.io/path: /metrics
+        prometheus.io/port: "9090"
+        prometheus.io/scrape: "true"
+      labels:
+        app: bng
+    spec:
+      containers:
+      - args:
+        - demo
+        - --subscribers=50
+        - --duration=24h
+        - --api-port=8080
+        - --nexus-url=http://nexus.default.svc:9000
+        env:
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: BNG_NODE_ID
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        image: ghcr.io/codelaboratoryltd/bng:latest
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        name: bng
+        ports:
+        - containerPort: 8080
+          name: http
+          protocol: TCP
+        - containerPort: 9090
+          name: metrics
+          protocol: TCP
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        resources:
+          limits:
+            cpu: 1000m
+            memory: 512Mi
+          requests:
+            cpu: 100m
+            memory: 128Mi

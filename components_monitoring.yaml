@@ -1,0 +1,1235 @@
+apiVersion: v1
+data:
+  bng-overview.json: |
+    {
+      "annotations": {
+        "list": [
+          {
+            "builtIn": 1,
+            "datasource": "-- Grafana --",
+            "enable": true,
+            "hide": true,
+            "iconColor": "rgba(0, 211, 255, 1)",
+            "name": "Annotations & Alerts",
+            "type": "dashboard"
+          }
+        ]
+      },
+      "description": "BNG Edge Infrastructure Overview Dashboard - Issue #11",
+      "editable": true,
+      "gnetId": null,
+      "graphTooltip": 0,
+      "id": null,
+      "iteration": 1706000000000,
+      "links": [],
+      "panels": [
+        {
+          "collapsed": false,
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+          "id": 100,
+          "panels": [],
+          "title": "Overview",
+          "type": "row"
+        },
+        {
+          "datasource": "Prometheus",
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "mappings": [],
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "yellow", "value": 1500 },
+                  { "color": "red", "value": 1900 }
+                ]
+              },
+              "unit": "short"
+            }
+          },
+          "gridPos": { "h": 4, "w": 4, "x": 0, "y": 1 },
+          "id": 1,
+          "options": {
+            "colorMode": "value",
+            "graphMode": "area",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "textMode": "auto"
+          },
+          "pluginVersion": "9.0.0",
+          "targets": [
+            {
+              "expr": "sum(bng_active_sessions{job=\"bng\"})",
+              "refId": "A"
+            }
+          ],
+          "title": "Active Subscribers",
+          "type": "stat"
+        },
+        {
+          "datasource": "Prometheus",
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "mappings": [],
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "yellow", "value": 0.005 },
+                  { "color": "red", "value": 0.01 }
+                ]
+              },
+              "unit": "s"
+            }
+          },
+          "gridPos": { "h": 4, "w": 4, "x": 4, "y": 1 },
+          "id": 2,
+          "options": {
+            "colorMode": "value",
+            "graphMode": "area",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "textMode": "auto"
+          },
+          "pluginVersion": "9.0.0",
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.99, rate(dhcp_request_duration_seconds_bucket{job=\"bng\"}[5m]))",
+              "refId": "A"
+            }
+          ],
+          "title": "DHCP P99 Latency",
+          "type": "stat"
+        },
+        {
+          "datasource": "Prometheus",
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "mappings": [],
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "red", "value": null },
+                  { "color": "yellow", "value": 90 },
+                  { "color": "green", "value": 95 }
+                ]
+              },
+              "unit": "percent"
+            }
+          },
+          "gridPos": { "h": 4, "w": 4, "x": 8, "y": 1 },
+          "id": 3,
+          "options": {
+            "colorMode": "value",
+            "graphMode": "area",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "textMode": "auto"
+          },
+          "pluginVersion": "9.0.0",
+          "targets": [
+            {
+              "expr": "100 * rate(dhcp_cache_hits_total{job=\"bng\"}[5m]) / (rate(dhcp_cache_hits_total{job=\"bng\"}[5m]) + rate(dhcp_cache_misses_total{job=\"bng\"}[5m]))",
+              "refId": "A"
+            }
+          ],
+          "title": "Cache Hit Rate",
+          "type": "stat"
+        },
+        {
+          "datasource": "Prometheus",
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "mappings": [],
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "yellow", "value": 80 },
+                  { "color": "red", "value": 95 }
+                ]
+              },
+              "unit": "percent"
+            }
+          },
+          "gridPos": { "h": 4, "w": 4, "x": 12, "y": 1 },
+          "id": 4,
+          "options": {
+            "colorMode": "value",
+            "graphMode": "area",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "textMode": "auto"
+          },
+          "pluginVersion": "9.0.0",
+          "targets": [
+            {
+              "expr": "100 * sum(ip_pool_allocated_addresses{job=\"bng\"}) / sum(ip_pool_total_addresses{job=\"bng\"})",
+              "refId": "A"
+            }
+          ],
+          "title": "IP Pool Utilization",
+          "type": "stat"
+        },
+        {
+          "datasource": "Prometheus",
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "mappings": [
+                { "options": { "0": { "color": "red", "index": 1, "text": "Down" }, "1": { "color": "green", "index": 0, "text": "Up" } }, "type": "value" }
+              ],
+              "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
+            }
+          },
+          "gridPos": { "h": 4, "w": 4, "x": 16, "y": 1 },
+          "id": 5,
+          "options": {
+            "colorMode": "background",
+            "graphMode": "none",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "textMode": "auto"
+          },
+          "pluginVersion": "9.0.0",
+          "targets": [
+            {
+              "expr": "up{job=\"bng\"}",
+              "legendFormat": "{{ instance }}",
+              "refId": "A"
+            }
+          ],
+          "title": "BNG Status",
+          "type": "stat"
+        },
+        {
+          "datasource": "Prometheus",
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "mappings": [
+                { "options": { "0": { "color": "red", "index": 1, "text": "Down" }, "1": { "color": "green", "index": 0, "text": "Up" } }, "type": "value" }
+              ],
+              "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
+            }
+          },
+          "gridPos": { "h": 4, "w": 4, "x": 20, "y": 1 },
+          "id": 6,
+          "options": {
+            "colorMode": "background",
+            "graphMode": "none",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "textMode": "auto"
+          },
+          "pluginVersion": "9.0.0",
+          "targets": [
+            {
+              "expr": "up{job=\"nexus\"}",
+              "legendFormat": "{{ instance }}",
+              "refId": "A"
+            }
+          ],
+          "title": "Nexus Status",
+          "type": "stat"
+        },
+        {
+          "collapsed": false,
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 5 },
+          "id": 101,
+          "panels": [],
+          "title": "DHCP Performance",
+          "type": "row"
+        },
+        {
+          "datasource": "Prometheus",
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "palette-classic" },
+              "custom": {
+                "axisLabel": "",
+                "axisPlacement": "auto",
+                "barAlignment": 0,
+                "drawStyle": "line",
+                "fillOpacity": 10,
+                "gradientMode": "none",
+                "hideFrom": { "legend": false, "tooltip": false, "viz": false },
+                "lineInterpolation": "linear",
+                "lineWidth": 1,
+                "pointSize": 5,
+                "scaleDistribution": { "type": "linear" },
+                "showPoints": "never",
+                "spanNulls": false,
+                "stacking": { "group": "A", "mode": "none" },
+                "thresholdsStyle": { "mode": "off" }
+              },
+              "mappings": [],
+              "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] },
+              "unit": "reqps"
+            }
+          },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
+          "id": 10,
+          "options": {
+            "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom" },
+            "tooltip": { "mode": "single" }
+          },
+          "targets": [
+            {
+              "expr": "rate(dhcp_requests_total{job=\"bng\"}[5m])",
+              "legendFormat": "{{ instance }} - {{ path }}",
+              "refId": "A"
+            }
+          ],
+          "title": "DHCP Request Rate",
+          "type": "timeseries"
+        },
+        {
+          "datasource": "Prometheus",
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "palette-classic" },
+              "custom": {
+                "axisLabel": "",
+                "axisPlacement": "auto",
+                "barAlignment": 0,
+                "drawStyle": "line",
+                "fillOpacity": 10,
+                "gradientMode": "none",
+                "hideFrom": { "legend": false, "tooltip": false, "viz": false },
+                "lineInterpolation": "linear",
+                "lineWidth": 1,
+                "pointSize": 5,
+                "scaleDistribution": { "type": "linear" },
+                "showPoints": "never",
+                "spanNulls": false,
+                "stacking": { "group": "A", "mode": "none" },
+                "thresholdsStyle": { "mode": "line+area" }
+              },
+              "mappings": [],
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "yellow", "value": 0.005 },
+                  { "color": "red", "value": 0.01 }
+                ]
+              },
+              "unit": "s"
+            }
+          },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 },
+          "id": 11,
+          "options": {
+            "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom" },
+            "tooltip": { "mode": "single" }
+          },
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.50, rate(dhcp_request_duration_seconds_bucket{job=\"bng\"}[5m]))",
+              "legendFormat": "P50 - {{ instance }}",
+              "refId": "A"
+            },
+            {
+              "expr": "histogram_quantile(0.95, rate(dhcp_request_duration_seconds_bucket{job=\"bng\"}[5m]))",
+              "legendFormat": "P95 - {{ instance }}",
+              "refId": "B"
+            },
+            {
+              "expr": "histogram_quantile(0.99, rate(dhcp_request_duration_seconds_bucket{job=\"bng\"}[5m]))",
+              "legendFormat": "P99 - {{ instance }}",
+              "refId": "C"
+            }
+          ],
+          "title": "DHCP Latency Distribution",
+          "type": "timeseries"
+        },
+        {
+          "datasource": "Prometheus",
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "palette-classic" },
+              "custom": {
+                "axisLabel": "",
+                "axisPlacement": "auto",
+                "barAlignment": 0,
+                "drawStyle": "line",
+                "fillOpacity": 10,
+                "gradientMode": "none",
+                "hideFrom": { "legend": false, "tooltip": false, "viz": false },
+                "lineInterpolation": "linear",
+                "lineWidth": 1,
+                "pointSize": 5,
+                "scaleDistribution": { "type": "linear" },
+                "showPoints": "never",
+                "spanNulls": false,
+                "stacking": { "group": "A", "mode": "none" },
+                "thresholdsStyle": { "mode": "off" }
+              },
+              "mappings": [],
+              "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] },
+              "unit": "percentunit"
+            }
+          },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 14 },
+          "id": 12,
+          "options": {
+            "legend": { "calcs": ["mean", "min"], "displayMode": "table", "placement": "bottom" },
+            "tooltip": { "mode": "single" }
+          },
+          "targets": [
+            {
+              "expr": "rate(dhcp_cache_hits_total{job=\"bng\"}[5m]) / (rate(dhcp_cache_hits_total{job=\"bng\"}[5m]) + rate(dhcp_cache_misses_total{job=\"bng\"}[5m]))",
+              "legendFormat": "{{ instance }}",
+              "refId": "A"
+            }
+          ],
+          "title": "Cache Hit Rate",
+          "type": "timeseries"
+        },
+        {
+          "datasource": "Prometheus",
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "palette-classic" },
+              "custom": {
+                "axisLabel": "",
+                "axisPlacement": "auto",
+                "barAlignment": 0,
+                "drawStyle": "bars",
+                "fillOpacity": 100,
+                "gradientMode": "none",
+                "hideFrom": { "legend": false, "tooltip": false, "viz": false },
+                "lineInterpolation": "linear",
+                "lineWidth": 1,
+                "pointSize": 5,
+                "scaleDistribution": { "type": "linear" },
+                "showPoints": "never",
+                "spanNulls": false,
+                "stacking": { "group": "A", "mode": "normal" },
+                "thresholdsStyle": { "mode": "off" }
+              },
+              "mappings": [],
+              "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] },
+              "unit": "short"
+            }
+          },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 14 },
+          "id": 13,
+          "options": {
+            "legend": { "calcs": ["sum"], "displayMode": "table", "placement": "bottom" },
+            "tooltip": { "mode": "single" }
+          },
+          "targets": [
+            {
+              "expr": "increase(dhcp_requests_total{job=\"bng\", path=\"fast\"}[1h])",
+              "legendFormat": "Fast Path - {{ instance }}",
+              "refId": "A"
+            },
+            {
+              "expr": "increase(dhcp_requests_total{job=\"bng\", path=\"slow\"}[1h])",
+              "legendFormat": "Slow Path - {{ instance }}",
+              "refId": "B"
+            }
+          ],
+          "title": "Fast vs Slow Path (hourly)",
+          "type": "timeseries"
+        },
+        {
+          "collapsed": false,
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 22 },
+          "id": 102,
+          "panels": [],
+          "title": "IP Pool Management",
+          "type": "row"
+        },
+        {
+          "datasource": "Prometheus",
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "palette-classic" },
+              "custom": {
+                "axisLabel": "",
+                "axisPlacement": "auto",
+                "barAlignment": 0,
+                "drawStyle": "line",
+                "fillOpacity": 20,
+                "gradientMode": "none",
+                "hideFrom": { "legend": false, "tooltip": false, "viz": false },
+                "lineInterpolation": "linear",
+                "lineWidth": 1,
+                "pointSize": 5,
+                "scaleDistribution": { "type": "linear" },
+                "showPoints": "never",
+                "spanNulls": false,
+                "stacking": { "group": "A", "mode": "none" },
+                "thresholdsStyle": { "mode": "off" }
+              },
+              "mappings": [],
+              "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] },
+              "unit": "short"
+            }
+          },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 23 },
+          "id": 20,
+          "options": {
+            "legend": { "calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom" },
+            "tooltip": { "mode": "single" }
+          },
+          "targets": [
+            {
+              "expr": "ip_pool_allocated_addresses{job=\"bng\"}",
+              "legendFormat": "{{ pool }} - allocated",
+              "refId": "A"
+            },
+            {
+              "expr": "ip_pool_available_addresses{job=\"bng\"}",
+              "legendFormat": "{{ pool }} - available",
+              "refId": "B"
+            }
+          ],
+          "title": "IP Pool Addresses",
+          "type": "timeseries"
+        },
+        {
+          "datasource": "Prometheus",
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "palette-classic" },
+              "custom": {
+                "axisLabel": "",
+                "axisPlacement": "auto",
+                "barAlignment": 0,
+                "drawStyle": "line",
+                "fillOpacity": 10,
+                "gradientMode": "none",
+                "hideFrom": { "legend": false, "tooltip": false, "viz": false },
+                "lineInterpolation": "linear",
+                "lineWidth": 1,
+                "pointSize": 5,
+                "scaleDistribution": { "type": "linear" },
+                "showPoints": "never",
+                "spanNulls": false,
+                "stacking": { "group": "A", "mode": "none" },
+                "thresholdsStyle": { "mode": "line+area" }
+              },
+              "mappings": [],
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "yellow", "value": 80 },
+                  { "color": "red", "value": 95 }
+                ]
+              },
+              "unit": "percent"
+            }
+          },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 23 },
+          "id": 21,
+          "options": {
+            "legend": { "calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom" },
+            "tooltip": { "mode": "single" }
+          },
+          "targets": [
+            {
+              "expr": "100 * ip_pool_allocated_addresses{job=\"bng\"} / ip_pool_total_addresses{job=\"bng\"}",
+              "legendFormat": "{{ pool }}",
+              "refId": "A"
+            }
+          ],
+          "title": "IP Pool Utilization %",
+          "type": "timeseries"
+        },
+        {
+          "collapsed": false,
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 31 },
+          "id": 103,
+          "panels": [],
+          "title": "Nexus Cluster",
+          "type": "row"
+        },
+        {
+          "datasource": "Prometheus",
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "palette-classic" },
+              "custom": {
+                "axisLabel": "",
+                "axisPlacement": "auto",
+                "barAlignment": 0,
+                "drawStyle": "line",
+                "fillOpacity": 10,
+                "gradientMode": "none",
+                "hideFrom": { "legend": false, "tooltip": false, "viz": false },
+                "lineInterpolation": "linear",
+                "lineWidth": 1,
+                "pointSize": 5,
+                "scaleDistribution": { "type": "linear" },
+                "showPoints": "never",
+                "spanNulls": false,
+                "stacking": { "group": "A", "mode": "none" },
+                "thresholdsStyle": { "mode": "off" }
+              },
+              "mappings": [],
+              "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] },
+              "unit": "reqps"
+            }
+          },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 32 },
+          "id": 30,
+          "options": {
+            "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom" },
+            "tooltip": { "mode": "single" }
+          },
+          "targets": [
+            {
+              "expr": "rate(nexus_allocations_total{job=\"nexus\"}[5m])",
+              "legendFormat": "{{ instance }}",
+              "refId": "A"
+            }
+          ],
+          "title": "Nexus Allocation Rate",
+          "type": "timeseries"
+        },
+        {
+          "datasource": "Prometheus",
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "palette-classic" },
+              "custom": {
+                "axisLabel": "",
+                "axisPlacement": "auto",
+                "barAlignment": 0,
+                "drawStyle": "line",
+                "fillOpacity": 10,
+                "gradientMode": "none",
+                "hideFrom": { "legend": false, "tooltip": false, "viz": false },
+                "lineInterpolation": "linear",
+                "lineWidth": 1,
+                "pointSize": 5,
+                "scaleDistribution": { "type": "linear" },
+                "showPoints": "never",
+                "spanNulls": false,
+                "stacking": { "group": "A", "mode": "none" },
+                "thresholdsStyle": { "mode": "line+area" }
+              },
+              "mappings": [],
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "yellow", "value": 0.05 },
+                  { "color": "red", "value": 0.1 }
+                ]
+              },
+              "unit": "s"
+            }
+          },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 32 },
+          "id": 31,
+          "options": {
+            "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom" },
+            "tooltip": { "mode": "single" }
+          },
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.99, rate(nexus_allocation_duration_seconds_bucket{job=\"nexus\"}[5m]))",
+              "legendFormat": "P99 - {{ instance }}",
+              "refId": "A"
+            }
+          ],
+          "title": "Nexus Allocation Latency",
+          "type": "timeseries"
+        },
+        {
+          "datasource": "Prometheus",
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "palette-classic" },
+              "custom": {
+                "axisLabel": "",
+                "axisPlacement": "auto",
+                "barAlignment": 0,
+                "drawStyle": "line",
+                "fillOpacity": 10,
+                "gradientMode": "none",
+                "hideFrom": { "legend": false, "tooltip": false, "viz": false },
+                "lineInterpolation": "linear",
+                "lineWidth": 1,
+                "pointSize": 5,
+                "scaleDistribution": { "type": "linear" },
+                "showPoints": "never",
+                "spanNulls": false,
+                "stacking": { "group": "A", "mode": "none" },
+                "thresholdsStyle": { "mode": "off" }
+              },
+              "mappings": [],
+              "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] },
+              "unit": "short"
+            }
+          },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 40 },
+          "id": 32,
+          "options": {
+            "legend": { "calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom" },
+            "tooltip": { "mode": "single" }
+          },
+          "targets": [
+            {
+              "expr": "nexus_cluster_healthy_nodes{job=\"nexus\"}",
+              "legendFormat": "Healthy Nodes",
+              "refId": "A"
+            },
+            {
+              "expr": "nexus_cluster_total_nodes{job=\"nexus\"}",
+              "legendFormat": "Total Nodes",
+              "refId": "B"
+            }
+          ],
+          "title": "Nexus Cluster Nodes",
+          "type": "timeseries"
+        },
+        {
+          "datasource": "Prometheus",
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "palette-classic" },
+              "custom": {
+                "axisLabel": "",
+                "axisPlacement": "auto",
+                "barAlignment": 0,
+                "drawStyle": "line",
+                "fillOpacity": 10,
+                "gradientMode": "none",
+                "hideFrom": { "legend": false, "tooltip": false, "viz": false },
+                "lineInterpolation": "linear",
+                "lineWidth": 1,
+                "pointSize": 5,
+                "scaleDistribution": { "type": "linear" },
+                "showPoints": "never",
+                "spanNulls": false,
+                "stacking": { "group": "A", "mode": "none" },
+                "thresholdsStyle": { "mode": "off" }
+              },
+              "mappings": [],
+              "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] },
+              "unit": "short"
+            }
+          },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 40 },
+          "id": 33,
+          "options": {
+            "legend": { "calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom" },
+            "tooltip": { "mode": "single" }
+          },
+          "targets": [
+            {
+              "expr": "nexus_hashring_nodes{job=\"nexus\"}",
+              "legendFormat": "Hashring Nodes - {{ instance }}",
+              "refId": "A"
+            },
+            {
+              "expr": "nexus_hashring_vnodes{job=\"nexus\"}",
+              "legendFormat": "Virtual Nodes - {{ instance }}",
+              "refId": "B"
+            }
+          ],
+          "title": "Hashring Status",
+          "type": "timeseries"
+        },
+        {
+          "collapsed": false,
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 48 },
+          "id": 104,
+          "panels": [],
+          "title": "HA Status",
+          "type": "row"
+        },
+        {
+          "datasource": "Prometheus",
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "mappings": [
+                { "options": { "0": { "color": "red", "index": 1, "text": "Disconnected" }, "1": { "color": "green", "index": 0, "text": "Connected" } }, "type": "value" }
+              ],
+              "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
+            }
+          },
+          "gridPos": { "h": 4, "w": 6, "x": 0, "y": 49 },
+          "id": 40,
+          "options": {
+            "colorMode": "background",
+            "graphMode": "none",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "textMode": "auto"
+          },
+          "pluginVersion": "9.0.0",
+          "targets": [
+            {
+              "expr": "bng_ha_peer_connected{job=\"bng\"}",
+              "legendFormat": "{{ instance }}",
+              "refId": "A"
+            }
+          ],
+          "title": "HA Peer Status",
+          "type": "stat"
+        },
+        {
+          "datasource": "Prometheus",
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "mappings": [
+                { "options": { "active": { "color": "green", "index": 0, "text": "Active" }, "standby": { "color": "blue", "index": 1, "text": "Standby" } }, "type": "value" }
+              ],
+              "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
+            }
+          },
+          "gridPos": { "h": 4, "w": 6, "x": 6, "y": 49 },
+          "id": 41,
+          "options": {
+            "colorMode": "background",
+            "graphMode": "none",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+            "textMode": "auto"
+          },
+          "pluginVersion": "9.0.0",
+          "targets": [
+            {
+              "expr": "bng_ha_role{job=\"bng\"}",
+              "legendFormat": "{{ instance }}",
+              "refId": "A"
+            }
+          ],
+          "title": "HA Role",
+          "type": "stat"
+        },
+        {
+          "datasource": "Prometheus",
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "palette-classic" },
+              "custom": {
+                "axisLabel": "",
+                "axisPlacement": "auto",
+                "barAlignment": 0,
+                "drawStyle": "line",
+                "fillOpacity": 10,
+                "gradientMode": "none",
+                "hideFrom": { "legend": false, "tooltip": false, "viz": false },
+                "lineInterpolation": "linear",
+                "lineWidth": 1,
+                "pointSize": 5,
+                "scaleDistribution": { "type": "linear" },
+                "showPoints": "never",
+                "spanNulls": false,
+                "stacking": { "group": "A", "mode": "none" },
+                "thresholdsStyle": { "mode": "line+area" }
+              },
+              "mappings": [],
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "yellow", "value": 2 },
+                  { "color": "red", "value": 5 }
+                ]
+              },
+              "unit": "s"
+            }
+          },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 49 },
+          "id": 42,
+          "options": {
+            "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom" },
+            "tooltip": { "mode": "single" }
+          },
+          "targets": [
+            {
+              "expr": "bng_ha_sync_lag_seconds{job=\"bng\"}",
+              "legendFormat": "{{ instance }}",
+              "refId": "A"
+            }
+          ],
+          "title": "HA Sync Lag",
+          "type": "timeseries"
+        },
+        {
+          "collapsed": false,
+          "gridPos": { "h": 1, "w": 24, "x": 0, "y": 57 },
+          "id": 105,
+          "panels": [],
+          "title": "System Resources",
+          "type": "row"
+        },
+        {
+          "datasource": "Prometheus",
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "palette-classic" },
+              "custom": {
+                "axisLabel": "",
+                "axisPlacement": "auto",
+                "barAlignment": 0,
+                "drawStyle": "line",
+                "fillOpacity": 10,
+                "gradientMode": "none",
+                "hideFrom": { "legend": false, "tooltip": false, "viz": false },
+                "lineInterpolation": "linear",
+                "lineWidth": 1,
+                "pointSize": 5,
+                "scaleDistribution": { "type": "linear" },
+                "showPoints": "never",
+                "spanNulls": false,
+                "stacking": { "group": "A", "mode": "none" },
+                "thresholdsStyle": { "mode": "off" }
+              },
+              "mappings": [],
+              "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] },
+              "unit": "percent"
+            }
+          },
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 58 },
+          "id": 50,
+          "options": {
+            "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom" },
+            "tooltip": { "mode": "single" }
+          },
+          "targets": [
+            {
+              "expr": "100 * rate(process_cpu_seconds_total{job=~\"bng|nexus\"}[5m])",
+              "legendFormat": "{{ job }} - {{ instance }}",
+              "refId": "A"
+            }
+          ],
+          "title": "CPU Usage",
+          "type": "timeseries"
+        },
+        {
+          "datasource": "Prometheus",
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "palette-classic" },
+              "custom": {
+                "axisLabel": "",
+                "axisPlacement": "auto",
+                "barAlignment": 0,
+                "drawStyle": "line",
+                "fillOpacity": 10,
+                "gradientMode": "none",
+                "hideFrom": { "legend": false, "tooltip": false, "viz": false },
+                "lineInterpolation": "linear",
+                "lineWidth": 1,
+                "pointSize": 5,
+                "scaleDistribution": { "type": "linear" },
+                "showPoints": "never",
+                "spanNulls": false,
+                "stacking": { "group": "A", "mode": "none" },
+                "thresholdsStyle": { "mode": "off" }
+              },
+              "mappings": [],
+              "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] },
+              "unit": "decbytes"
+            }
+          },
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 58 },
+          "id": 51,
+          "options": {
+            "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom" },
+            "tooltip": { "mode": "single" }
+          },
+          "targets": [
+            {
+              "expr": "process_resident_memory_bytes{job=~\"bng|nexus\"}",
+              "legendFormat": "{{ job }} - {{ instance }}",
+              "refId": "A"
+            }
+          ],
+          "title": "Memory Usage",
+          "type": "timeseries"
+        }
+      ],
+      "refresh": "30s",
+      "schemaVersion": 36,
+      "style": "dark",
+      "tags": ["bng", "edge", "infrastructure"],
+      "templating": { "list": [] },
+      "time": { "from": "now-1h", "to": "now" },
+      "timepicker": {},
+      "timezone": "",
+      "title": "BNG Edge Infrastructure Overview",
+      "uid": "bng-edge-overview",
+      "version": 1
+    }
+kind: ConfigMap
+metadata:
+  labels:
+    grafana_dashboard: "1"
+  name: grafana-dashboards-bng-4m44622g94
+  namespace: monitoring
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  labels:
+    app: prometheus
+    role: alert-rules
+  name: bng-edge-alerts
+  namespace: monitoring
+spec:
+  groups:
+  - interval: 30s
+    name: bng.rules
+    rules:
+    - alert: BNGDown
+      annotations:
+        description: BNG instance {{ $labels.instance }} has been unreachable for
+          more than 1 minute.
+        runbook_url: https://docs.example.com/runbooks/bng-down
+        summary: BNG instance {{ $labels.instance }} is down
+      expr: up{job="bng"} == 0
+      for: 1m
+      labels:
+        severity: critical
+    - alert: BNGHighCPU
+      annotations:
+        description: 'BNG instance {{ $labels.instance }} CPU usage has been above
+          80% for 5 minutes. Current: {{ $value | printf "%.1f" }}%'
+        summary: BNG {{ $labels.instance }} CPU usage is high
+      expr: rate(process_cpu_seconds_total{job="bng"}[5m]) * 100 > 80
+      for: 5m
+      labels:
+        severity: warning
+    - alert: BNGHighMemory
+      annotations:
+        description: 'BNG instance {{ $labels.instance }} is using more than 4GB of
+          memory. Current: {{ $value | printf "%.2f" }}GB'
+        summary: BNG {{ $labels.instance }} memory usage is high
+      expr: (process_resident_memory_bytes{job="bng"} / 1024 / 1024 / 1024) > 4
+      for: 5m
+      labels:
+        severity: warning
+    - alert: DHCPHighLatency
+      annotations:
+        description: 'DHCP P99 latency on {{ $labels.instance }} is above 10ms (slow
+          path threshold). Current: {{ $value | printf "%.3f" }}s'
+        summary: DHCP P99 latency is high on {{ $labels.instance }}
+      expr: histogram_quantile(0.99, rate(dhcp_request_duration_seconds_bucket{job="bng"}[5m]))
+        > 0.01
+      for: 5m
+      labels:
+        severity: warning
+    - alert: DHCPFastPathLatencyHigh
+      annotations:
+        description: 'DHCP fast path P99 latency on {{ $labels.instance }} is above
+          100us. Current: {{ $value | printf "%.6f" }}s'
+        summary: DHCP fast path P99 latency is high on {{ $labels.instance }}
+      expr: histogram_quantile(0.99, rate(dhcp_fast_path_duration_seconds_bucket{job="bng"}[5m]))
+        > 0.0001
+      for: 5m
+      labels:
+        severity: warning
+    - alert: DHCPCacheHitRateLow
+      annotations:
+        description: 'DHCP cache hit rate on {{ $labels.instance }} is below 95%.
+          Current: {{ $value | printf "%.1f" }}%'
+        summary: DHCP cache hit rate is low on {{ $labels.instance }}
+      expr: rate(dhcp_cache_hits_total{job="bng"}[5m]) / (rate(dhcp_cache_hits_total{job="bng"}[5m])
+        + rate(dhcp_cache_misses_total{job="bng"}[5m])) < 0.95
+      for: 10m
+      labels:
+        severity: warning
+    - alert: DHCPErrorRateHigh
+      annotations:
+        description: 'DHCP error rate on {{ $labels.instance }} is above 1%. Current:
+          {{ $value | printf "%.2f" }}%'
+        summary: DHCP error rate is high on {{ $labels.instance }}
+      expr: rate(dhcp_errors_total{job="bng"}[5m]) / rate(dhcp_requests_total{job="bng"}[5m])
+        > 0.01
+      for: 5m
+      labels:
+        severity: warning
+    - alert: IPPoolExhausted
+      annotations:
+        description: 'IP pool {{ $labels.pool }} has fewer than 100 available addresses.
+          Current: {{ $value }}'
+        summary: IP pool {{ $labels.pool }} is nearly exhausted
+      expr: ip_pool_available_addresses{job="bng"} < 100
+      for: 5m
+      labels:
+        severity: critical
+    - alert: IPPoolUtilizationHigh
+      annotations:
+        description: 'IP pool {{ $labels.pool }} utilization is above 90%. Current:
+          {{ $value | printf "%.1f" }}%'
+        summary: IP pool {{ $labels.pool }} utilization is high
+      expr: (ip_pool_allocated_addresses{job="bng"} / ip_pool_total_addresses{job="bng"})
+        > 0.9
+      for: 10m
+      labels:
+        severity: warning
+    - alert: SubscriberSessionsHigh
+      annotations:
+        description: 'BNG instance {{ $labels.instance }} has more than 1800 active
+          subscribers (approaching 2000 limit). Current: {{ $value }}'
+        summary: High subscriber count on {{ $labels.instance }}
+      expr: bng_active_sessions{job="bng"} > 1800
+      for: 5m
+      labels:
+        severity: warning
+    - alert: SessionCreationRateHigh
+      annotations:
+        description: 'Session creation rate on {{ $labels.instance }} is above 100/s.
+          This may indicate a network event. Current: {{ $value | printf "%.1f" }}/s'
+        summary: High session creation rate on {{ $labels.instance }}
+      expr: rate(bng_sessions_created_total{job="bng"}[5m]) > 100
+      for: 5m
+      labels:
+        severity: warning
+  - interval: 30s
+    name: nexus.rules
+    rules:
+    - alert: NexusDown
+      annotations:
+        description: Nexus instance {{ $labels.instance }} has been unreachable for
+          more than 1 minute.
+        summary: Nexus instance {{ $labels.instance }} is down
+      expr: up{job="nexus"} == 0
+      for: 1m
+      labels:
+        severity: critical
+    - alert: NexusClusterUnhealthy
+      annotations:
+        description: 'Nexus cluster has fewer than 2 healthy nodes. Current: {{ $value
+          }}'
+        summary: Nexus cluster has insufficient healthy nodes
+      expr: nexus_cluster_healthy_nodes{job="nexus"} < 2
+      for: 2m
+      labels:
+        severity: critical
+    - alert: NexusHashringRebalancing
+      annotations:
+        description: Nexus hashring on {{ $labels.instance }} has been rebalancing
+          for more than 10 minutes.
+        summary: Nexus hashring rebalancing for over 10 minutes
+      expr: nexus_hashring_rebalancing{job="nexus"} == 1
+      for: 10m
+      labels:
+        severity: warning
+    - alert: NexusAllocationLatencyHigh
+      annotations:
+        description: 'Nexus allocation P99 latency is above 100ms. Current: {{ $value
+          | printf "%.3f" }}s'
+        summary: Nexus allocation latency is high
+      expr: histogram_quantile(0.99, rate(nexus_allocation_duration_seconds_bucket{job="nexus"}[5m]))
+        > 0.1
+      for: 5m
+      labels:
+        severity: warning
+  - interval: 30s
+    name: ha.rules
+    rules:
+    - alert: HAPeerDisconnected
+      annotations:
+        description: BNG instance {{ $labels.instance }} has lost connection to its
+          HA peer.
+        summary: HA peer disconnected on {{ $labels.instance }}
+      expr: bng_ha_peer_connected{job="bng"} == 0
+      for: 1m
+      labels:
+        severity: critical
+    - alert: HASyncLagHigh
+      annotations:
+        description: 'HA sync lag on {{ $labels.instance }} is above 5 seconds. Current:
+          {{ $value | printf "%.1f" }}s'
+        summary: HA sync lag is high on {{ $labels.instance }}
+      expr: bng_ha_sync_lag_seconds{job="bng"} > 5
+      for: 2m
+      labels:
+        severity: warning
+    - alert: HAFailoverOccurred
+      annotations:
+        description: A HA failover event was detected on {{ $labels.instance }}.
+        summary: HA failover occurred on {{ $labels.instance }}
+      expr: increase(bng_ha_failovers_total{job="bng"}[5m]) > 0
+      labels:
+        severity: warning
+  - interval: 30s
+    name: network.rules
+    rules:
+    - alert: HighPacketDropRate
+      annotations:
+        description: 'Packet drop rate on {{ $labels.instance }} is above 0.1%. Current:
+          {{ $value | printf "%.3f" }}%'
+        summary: High packet drop rate on {{ $labels.instance }}
+      expr: rate(bng_packets_dropped_total{job="bng"}[5m]) / rate(bng_packets_total{job="bng"}[5m])
+        > 0.001
+      for: 5m
+      labels:
+        severity: warning
+    - alert: HighXDPDropRate
+      annotations:
+        description: 'XDP drop rate on {{ $labels.instance }} is above 1000/s. Current:
+          {{ $value | printf "%.1f" }}/s'
+        summary: High XDP drop rate on {{ $labels.instance }}
+      expr: rate(xdp_drop_total{job="bng"}[5m]) > 1000
+      for: 5m
+      labels:
+        severity: warning
+    - alert: EBPFMapNearCapacity
+      annotations:
+        description: 'eBPF map {{ $labels.map }} on {{ $labels.instance }} is above
+          90% capacity. Current: {{ $value | printf "%.1f" }}%'
+        summary: eBPF map {{ $labels.map }} near capacity
+      expr: (ebpf_map_entries{job="bng"} / ebpf_map_max_entries{job="bng"}) > 0.9
+      for: 5m
+      labels:
+        severity: warning
+  - interval: 30s
+    name: radius.rules
+    rules:
+    - alert: RADIUSServerUnreachable
+      annotations:
+        description: RADIUS server {{ $labels.server }} has been unreachable from
+          {{ $labels.instance }} for more than 1 minute.
+        summary: RADIUS server {{ $labels.server }} is unreachable
+      expr: radius_server_up{job="bng"} == 0
+      for: 1m
+      labels:
+        severity: critical
+    - alert: RADIUSHighLatency
+      annotations:
+        description: 'RADIUS P99 latency is above 1s. Current: {{ $value | printf
+          "%.2f" }}s'
+        summary: RADIUS P99 latency is high
+      expr: histogram_quantile(0.99, rate(radius_request_duration_seconds_bucket{job="bng"}[5m]))
+        > 1
+      for: 5m
+      labels:
+        severity: warning
+    - alert: RADIUSHighRejectRate
+      annotations:
+        description: 'RADIUS reject rate is above 10%. Current: {{ $value | printf
+          "%.1f" }}%'
+        summary: RADIUS reject rate is high
+      expr: rate(radius_rejects_total{job="bng"}[5m]) / rate(radius_requests_total{job="bng"}[5m])
+        > 0.1
+      for: 10m
+      labels:
+        severity: warning

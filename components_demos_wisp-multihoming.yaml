@@ -1,0 +1,517 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  labels:
+    demo: wisp-multihoming
+  name: demo-wisp-multihoming
+---
+apiVersion: v1
+automountServiceAccountToken: false
+kind: ServiceAccount
+metadata:
+  labels:
+    app: nexus
+    app.kubernetes.io/component: nexus
+    app.kubernetes.io/name: nexus
+    demo: wisp-multihoming
+  name: wisp-nexus
+  namespace: demo-wisp-multihoming
+---
+apiVersion: v1
+data:
+  bgp-neighbors.json: |
+    {
+      "local_as": 65100,
+      "router_id": "10.0.0.1",
+      "neighbors": [
+        {
+          "address": "10.0.1.1",
+          "remote_as": 65200,
+          "description": "ISP-A-Primary",
+          "bfd_enabled": true,
+          "next_hop_self": true,
+          "route_map_in": "ISP-A-IN",
+          "route_map_out": "ISP-A-OUT"
+        },
+        {
+          "address": "10.0.2.1",
+          "remote_as": 65300,
+          "description": "ISP-B-Backup",
+          "bfd_enabled": true,
+          "next_hop_self": true,
+          "route_map_in": "ISP-B-IN",
+          "route_map_out": "ISP-B-OUT"
+        }
+      ],
+      "bfd": {
+        "min_rx_interval": 100,
+        "min_tx_interval": 100,
+        "detect_multiplier": 3
+      },
+      "route_maps": {
+        "ISP-A-IN": {
+          "action": "permit",
+          "set_clauses": ["local-preference 200"]
+        },
+        "ISP-B-IN": {
+          "action": "permit",
+          "set_clauses": ["local-preference 100"]
+        },
+        "ISP-A-OUT": {
+          "action": "permit",
+          "set_clauses": ["community 65200:100"]
+        },
+        "ISP-B-OUT": {
+          "action": "permit",
+          "set_clauses": ["community 65300:100"]
+        }
+      }
+    }
+kind: ConfigMap
+metadata:
+  labels:
+    demo: wisp-multihoming
+  name: wisp-bgp-config-m89b8b56gt
+  namespace: demo-wisp-multihoming
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: bng
+    demo: wisp-multihoming
+  name: wisp-bng
+  namespace: demo-wisp-multihoming
+spec:
+  ports:
+  - name: api
+    port: 8080
+    targetPort: 8080
+  - name: metrics
+    port: 9090
+    targetPort: 9090
+  selector:
+    app: bng
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: frr-upstream
+    demo: wisp-multihoming
+    provider: isp-a
+  name: wisp-frr-upstream-a
+  namespace: demo-wisp-multihoming
+spec:
+  ports:
+  - name: bgp
+    port: 179
+    targetPort: 179
+  selector:
+    app: frr-upstream
+    provider: isp-a
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: frr-upstream
+    demo: wisp-multihoming
+    provider: isp-b
+  name: wisp-frr-upstream-b
+  namespace: demo-wisp-multihoming
+spec:
+  ports:
+  - name: bgp
+    port: 179
+    targetPort: 179
+  selector:
+    app: frr-upstream
+    provider: isp-b
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: nexus
+    app.kubernetes.io/component: nexus
+    app.kubernetes.io/name: nexus
+    demo: wisp-multihoming
+  name: wisp-nexus
+  namespace: demo-wisp-multihoming
+spec:
+  ports:
+  - name: http
+    port: 9000
+    targetPort: 9000
+  - name: metrics
+    port: 9002
+    targetPort: 9002
+  selector:
+    app: nexus
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: bng
+    demo: wisp-multihoming
+  name: wisp-bng
+  namespace: demo-wisp-multihoming
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: bng
+  template:
+    metadata:
+      annotations:
+        prometheus.io/path: /metrics
+        prometheus.io/port: "9090"
+        prometheus.io/scrape: "true"
+      labels:
+        app: bng
+    spec:
+      containers:
+      - args:
+        - demo
+        - --subscribers=100
+        - --duration=24h
+        - --api-port=8080
+        - --nexus-url=http://wisp-nexus.demo-wisp-multihoming.svc:9000
+        - --bgp-enabled
+        - --bgp-local-as=65100
+        - --bgp-router-id=10.0.0.1
+        - --bgp-config=/etc/bng/bgp-neighbors.json
+        env:
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: BNG_NODE_ID
+          value: wisp-bng
+        image: ghcr.io/codelaboratoryltd/bng:latest
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        name: bng
+        ports:
+        - containerPort: 8080
+          name: api
+          protocol: TCP
+        - containerPort: 9090
+          name: metrics
+          protocol: TCP
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        resources:
+          limits:
+            cpu: 500m
+            memory: 512Mi
+          requests:
+            cpu: 100m
+            memory: 128Mi
+        volumeMounts:
+        - mountPath: /etc/bng
+          name: bgp-config
+          readOnly: true
+      volumes:
+      - configMap:
+          name: wisp-bgp-config-m89b8b56gt
+        name: bgp-config
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: frr-upstream
+    demo: wisp-multihoming
+    provider: isp-a
+  name: wisp-frr-upstream-a
+  namespace: demo-wisp-multihoming
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: frr-upstream
+      provider: isp-a
+  template:
+    metadata:
+      labels:
+        app: frr-upstream
+        provider: isp-a
+    spec:
+      containers:
+      - args:
+        - |
+          cat > /etc/frr/frr.conf << 'EOF'
+          frr defaults traditional
+          hostname isp-a
+          log syslog informational
+          !
+          router bgp 65200
+           bgp router-id 10.0.1.1
+           neighbor 10.0.1.2 remote-as 65100
+           neighbor 10.0.1.2 description WISP-BNG
+           neighbor 10.0.1.2 bfd
+           !
+           address-family ipv4 unicast
+            neighbor 10.0.1.2 activate
+            network 0.0.0.0/0
+           exit-address-family
+          !
+          bfd
+           peer 10.0.1.2
+            receive-interval 100
+            transmit-interval 100
+            detect-multiplier 3
+           !
+          !
+          EOF
+          /usr/lib/frr/docker-start
+        command:
+        - /bin/sh
+        - -c
+        image: quay.io/frrouting/frr:10.0.0
+        name: frr
+        ports:
+        - containerPort: 179
+          name: bgp
+          protocol: TCP
+        resources:
+          limits:
+            cpu: 200m
+            memory: 128Mi
+          requests:
+            cpu: 50m
+            memory: 64Mi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: frr-upstream
+    demo: wisp-multihoming
+    provider: isp-b
+  name: wisp-frr-upstream-b
+  namespace: demo-wisp-multihoming
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: frr-upstream
+      provider: isp-b
+  template:
+    metadata:
+      labels:
+        app: frr-upstream
+        provider: isp-b
+    spec:
+      containers:
+      - args:
+        - |
+          cat > /etc/frr/frr.conf << 'EOF'
+          frr defaults traditional
+          hostname isp-b
+          log syslog informational
+          !
+          router bgp 65300
+           bgp router-id 10.0.2.1
+           neighbor 10.0.2.2 remote-as 65100
+           neighbor 10.0.2.2 description WISP-BNG
+           neighbor 10.0.2.2 bfd
+           !
+           address-family ipv4 unicast
+            neighbor 10.0.2.2 activate
+            network 0.0.0.0/0
+           exit-address-family
+          !
+          bfd
+           peer 10.0.2.2
+            receive-interval 100
+            transmit-interval 100
+            detect-multiplier 3
+           !
+          !
+          EOF
+          /usr/lib/frr/docker-start
+        command:
+        - /bin/sh
+        - -c
+        image: quay.io/frrouting/frr:10.0.0
+        name: frr
+        ports:
+        - containerPort: 179
+          name: bgp
+          protocol: TCP
+        resources:
+          limits:
+            cpu: 200m
+            memory: 128Mi
+          requests:
+            cpu: 50m
+            memory: 64Mi
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  labels:
+    app: nexus
+    app.kubernetes.io/component: nexus
+    app.kubernetes.io/name: nexus
+    demo: wisp-multihoming
+  name: wisp-nexus
+  namespace: demo-wisp-multihoming
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nexus
+  serviceName: wisp-nexus
+  template:
+    metadata:
+      annotations:
+        prometheus.io/path: /metrics
+        prometheus.io/port: "9002"
+        prometheus.io/scrape: "true"
+      labels:
+        app: nexus
+    spec:
+      containers:
+      - args:
+        - serve
+        - --http-port=9000
+        - --metrics-port=9002
+        env:
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        image: ghcr.io/codelaboratoryltd/nexus:latest
+        imagePullPolicy: Always
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 9000
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        name: nexus
+        ports:
+        - containerPort: 9000
+          name: http
+          protocol: TCP
+        - containerPort: 9002
+          name: metrics
+          protocol: TCP
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 9000
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        resources:
+          limits:
+            cpu: 500m
+            memory: 256Mi
+          requests:
+            cpu: 100m
+            memory: 128Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+      securityContext:
+        runAsGroup: 1000
+        runAsNonRoot: true
+        runAsUser: 1000
+      serviceAccountName: wisp-nexus
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  labels:
+    app: nexus
+    app.kubernetes.io/component: nexus
+    app.kubernetes.io/name: nexus
+    demo: wisp-multihoming
+  name: wisp-nexus
+  namespace: demo-wisp-multihoming
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: nexus
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  labels:
+    app: nexus
+    app.kubernetes.io/component: nexus
+    app.kubernetes.io/name: nexus
+    demo: wisp-multihoming
+  name: wisp-nexus
+  namespace: demo-wisp-multihoming
+spec:
+  egress:
+  - toEndpoints:
+    - matchLabels:
+        app: nexus
+    toPorts:
+    - ports:
+      - port: "9000"
+        protocol: TCP
+      - port: "9002"
+        protocol: TCP
+  - toEndpoints:
+    - matchLabels:
+        k8s-app: kube-dns
+        k8s:io.kubernetes.pod.namespace: kube-system
+    toPorts:
+    - ports:
+      - port: "53"
+        protocol: UDP
+      - port: "53"
+        protocol: TCP
+  endpointSelector:
+    matchLabels:
+      app: nexus
+  ingress:
+  - fromEndpoints:
+    - matchLabels:
+        app: bng
+    toPorts:
+    - ports:
+      - port: "9000"
+        protocol: TCP
+  - fromEndpoints:
+    - matchLabels:
+        app: nexus
+    toPorts:
+    - ports:
+      - port: "9000"
+        protocol: TCP
+      - port: "9002"
+        protocol: TCP
+  - fromEntities:
+    - health
+    - cluster
+    toPorts:
+    - ports:
+      - port: "9000"
+        protocol: TCP
+  - fromEntities:
+    - cluster
+    toPorts:
+    - ports:
+      - port: "9002"
+        protocol: TCP
