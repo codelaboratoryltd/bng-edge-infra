@@ -6317,7 +6317,7 @@ spec:
       containers:
       - args:
         - demo
-        - --subscribers=50
+        - --subscribers=100
         - --duration=24h
         - --api-port=8080
         image: ghcr.io/codelaboratoryltd/bng:latest
