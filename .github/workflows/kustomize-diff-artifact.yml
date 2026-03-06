@@ -1,0 +1,31 @@
+# Kustomize Diff (Artifact Mode) - Generate HTML diff of rendered manifests
+name: Kustomize Diff (Artifact)
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'clusters/**'
+      - 'components/**'
+      - 'charts/**'
+      - 'configs/**'
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  kustomize-diff:
+    name: Rendered Manifest Diff
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Generate diff
+        uses: mgazza/kustomize-roots@v1
+        with:
+          mode: artifact
+          exclude: ".git src scripts docs tests"

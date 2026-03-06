@@ -1,0 +1,36 @@
+# Kustomize Diff (PR Branch Mode) - Shadow PRs with native GitHub diff
+name: Kustomize Diff (PR Branch)
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, closed]
+    paths:
+      - 'clusters/**'
+      - 'components/**'
+      - 'charts/**'
+      - 'configs/**'
+
+concurrency:
+  group: kustomize-diff-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  kustomize-diff:
+    name: Rendered Manifest Diff
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Generate diff
+        uses: mgazza/kustomize-roots@v1
+        with:
+          mode: pr-branch
+          exclude: ".git src scripts docs tests"

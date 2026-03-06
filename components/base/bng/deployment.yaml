@@ -35,7 +35,7 @@ spec:
               add: ["NET_ADMIN", "BPF"]
           args:
             - demo
-            - --subscribers=50
+            - --subscribers=100
             - --duration=24h
             - --api-port=8080
           ports:
